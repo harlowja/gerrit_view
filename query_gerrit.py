@@ -99,6 +99,9 @@ def print_results(results):
                     _get_key('subject', r, truncate=True),
                     _get_date('createdOn', r), _get_date('lastUpdated', r),
                 ]
+                non_empty = [r for r in row if r]
+                if len(non_empty) == 0:
+                    continue
                 table.add_row(row)
         print_wrapped("Gerrit query for '%s' (%s total reviews)" % (k, len(num_seen)))
         if len(num_seen):
