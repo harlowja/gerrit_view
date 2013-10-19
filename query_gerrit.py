@@ -1,0 +1,138 @@
+#!/usr/bin/python
+
+import collections
+import json
+import optparse
+import os
+import subprocess
+
+from datetime import datetime
+
+import prettytable
+
+GERRIT_HOST = 'review.openstack.org'
+GERRIT_PORT = 29418
+BASE_CMD = ('ssh', '-p', str(GERRIT_PORT), str(GERRIT_HOST), 'gerrit',
+            'query', '--format=JSON')
+TRUNCATE_LEN = 27
+
+
+def tiny_p(cmd, capture=True):
+    # Darn python 2.6 doesn't have check_output (argggg)
+    stdout = subprocess.PIPE
+    stderr = subprocess.PIPE
+    if not capture:
+        stdout = None
+        stderr = None
+    sp = subprocess.Popen(cmd, stdout=stdout,
+                    stderr=stderr, stdin=None)
+    (out, err) = sp.communicate()
+    ret = sp.returncode  # pylint: disable=E1101
+    if ret not in [0]:
+        raise RuntimeError("Failed running %s [rc=%s] (%s, %s)" 
+                            % (cmd, ret, out, err))
+    return (out, err)
+
+
+def run_query(*args):
+    cmd = list(BASE_CMD)
+    cmd.extend(args)
+    (stdout, _stderr) = tiny_p(cmd)
+    entries = stdout.splitlines()
+    for e in entries:
+        dec = json.loads(e)
+        if 'rowCount' in dec:
+            continue
+        yield dec
+
+
+def _get_key(k, row, truncate=False):
+    if k not in row:
+        return ""
+    v = str(row[k])
+    if truncate:
+        if len(v) > TRUNCATE_LEN:
+            v = v[0:TRUNCATE_LEN] + "..."
+    return v
+
+
+def print_wrapped(text):
+    print("-" * (len(text)))
+    print(text)
+    print("-" * (len(text)))
+
+
+def _get_date(k, row):
+    v = _get_key(k, row)
+    if not v:
+        return ''
+    try:
+        dt = datetime.fromtimestamp(int(v))
+        return dt.strftime('%I:%M %p %m/%d/%y')
+    except:
+        return ''
+
+
+def print_results(results):
+    names = sorted(results.keys())
+    for k in names:
+        table = prettytable.PrettyTable(["Status", "Topic", "Url", "Project", 'Subject', 'Created On', 'Last Updated'])
+        table.padding_width = 1
+        res = results[k]
+        num_seen = set()
+        for d in sorted(res.keys()):
+            if len(res[d]) == 0:
+                continue
+            for r in res[d]:
+                try:
+                    num = int(r['number'])
+                except (ValueError, TypeError, KeyError):
+                    num = -1
+                if num < 0:
+                    continue
+                if num in num_seen:
+                    continue
+                num_seen.add(num)
+                row = [
+                    _get_key('status', r), _get_key('topic', r, truncate=True),
+                    _get_key('url', r), _get_key('project', r),
+                    _get_key('subject', r, truncate=True),
+                    _get_date('createdOn', r), _get_date('lastUpdated', r),
+                ]
+                table.add_row(row)
+        print_wrapped("Gerrit query for '%s' (%s total reviews)" % (k, len(num_seen)))
+        if len(num_seen):
+            print(table.get_string(sortby="Status"))
+
+
+def get_info(users_names):
+    entries = {}
+    for n in sorted(list(users_names)):
+        if n in entries:
+            continue
+        if n not in entries:
+            entries[n] = {
+                'merged': [],
+                'open': [],
+                'abandoned': [],
+                'submitted': [],
+            }
+        types = entries[n].keys()
+        for t in types:
+            entries[n][t].extend(run_query("status:%s AND owner:'%s'" % (t, n)))
+    return entries
+
+
+def main():
+    parser = optparse.OptionParser()
+    parser.add_option("-u", "--user", dest="users", action='append',
+                      help="gather information on given USER", metavar="USER")
+    (options, args) = parser.parse_args()
+    if not options.users:
+        parser.error("Users required")
+    entries = get_info(list(options.users))
+    print_results(entries)
+
+
+if __name__ == '__main__':
+    main()
