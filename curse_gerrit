@@ -15,7 +15,9 @@ from datetime import datetime
 from gerritlib import gerrit
 import urwid
 
-logging.basicConfig(level=logging.INFO, filename='output.log')
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s %(levelname)s: %(message)s',
+                    filename='output.log', filemode='wb')
 LOG = logging.getLogger(__name__)
 
 ### DEFAULT SETTINGS
@@ -26,6 +28,7 @@ CONNECT_ATTEMPTS = 5
 MAX_LIST_LEN = 50
 TRUNCATE_LEN = 47  # 3 for the ...
 ALARM_FREQ = 0.5
+SANITY_QUERY = 'status:open limit:1'
 
 ### GUI CONSTANTS
 
@@ -111,20 +114,29 @@ class GerritWatcher(threading.Thread):
         self.port = port
         self.server = server
         self.username = username
-        self.connected = False
         self.daemon = True
         self.gerrit = None
 
     def _connect(self):
         try:
-            self.gerrit = gerrit.Gerrit(self.server, self.username,
-                                        self.port, self.keyfile)
+            if self.gerrit is None:
+                self.gerrit = gerrit.Gerrit(self.server, self.username,
+                                            self.port, self.keyfile)
+            self.gerrit.bulk_query(SANITY_QUERY)
             self.gerrit.startWatching()
             LOG.info('Start watching gerrit event stream.')
-            self.connected = True
         except Exception:
             LOG.exception('Exception while connecting to gerrit')
-            self.connected = False
+
+    @property
+    def connected(self):
+        if self.gerrit is None:
+            return False
+        if self.gerrit.watcher_thread is None:
+            return False
+        if not self.gerrit.watcher_thread.is_alive():
+            return False
+        return True
 
     def _ensure_connected(self):
         if self.connected:
@@ -151,9 +163,9 @@ class GerritWatcher(threading.Thread):
             self._handle_event(event)
         except Exception:
             LOG.exception('Exception encountered in event loop')
-            if not self.gerrit.watcher_thread.is_alive():
+            if self.gerrit.watcher_thread is not None \
+               and not self.gerrit.watcher_thread.is_alive():
                 self.gerrit = None
-                self.connected = False
 
     def run(self):
         while True:
@@ -228,7 +240,7 @@ def main():
         col_attrs.append(make_text(col_name))
         table_header.append(tuple(col_attrs))
     header_sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
-    footer_text = urwid.Text("Waiting for events...")
+    footer_text = urwid.Text("")
     table_header = urwid.AttrWrap(urwid.Columns(table_header, dividechars=1),
                                   'body')
     header_pile = urwid.Pile([table_header, header_sep])
@@ -329,6 +341,10 @@ def main():
                                      gerrit_details.get('comment-added', 0),
                                      gerrit_details.get('change-merged', 0))
         footer_details.set_text(detail_text)
+        if gerrit_reader.connected:
+            footer_text.set_text("Waiting for events...")
+        else:
+            footer_text.set_text("Still trying to connect...")
         loop.event_loop.alarm(ALARM_FREQ, process_gerrit)
 
     loop = urwid.MainLoop(frame, PALETTE,
