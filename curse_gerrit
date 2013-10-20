@@ -89,9 +89,10 @@ def _get_key_path():
     return None
 
 
-def _get_now():
-    dt = datetime.now()
-    return dt.strftime('%I:%M %p %m/%d/%Y')
+def _format_date(when=None):
+    if when is None:
+        when = datetime.now()
+    return when.strftime('%I:%M %p %m/%d/%Y')
 
 
 def _get_date(k, row):
@@ -99,8 +100,7 @@ def _get_date(k, row):
     if not v:
         return ''
     try:
-        dt = datetime.fromtimestamp(int(v))
-        return dt.strftime('%I:%M %p %m/%d/%Y')
+        return _format_date(datetime.fromtimestamp(int(v)))
     except (ValueError, TypeError):
         return ''
 
@@ -432,7 +432,8 @@ def main():
             except Exception:
                 LOG.exception("Failed handling event: %s", e)
         detail_text = "%s, %s events received (%sp, %sc, %sm, %sr)"
-        detail_text = detail_text % (_get_now(), sum(gerrit_details.values()),
+        detail_text = detail_text % (_format_date(),
+                                     sum(gerrit_details.values()),
                                      gerrit_details.get('patchset-created', 0),
                                      gerrit_details.get('comment-added', 0),
                                      gerrit_details.get('change-merged', 0),
