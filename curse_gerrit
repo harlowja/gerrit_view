@@ -27,9 +27,9 @@ GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
 BACKOFF_ATTEMPTS = 5
 MAX_LIST_LEN = 50
-TRUNCATE_LEN = 47  # 3 for the ...
+TRUNCATE_LEN = 60
 ALARM_FREQ = 0.5
-SANITY_QUERY = 'status:open limit:1'
+SANITY_QUERY = 'status:open limit:%s' % MAX_LIST_LEN
 
 ### GUI CONSTANTS
 
@@ -118,6 +118,37 @@ class GerritWatcher(threading.Thread):
         self.daemon = True
         self.gerrit = None
 
+    def _sanity_check(self):
+
+        def event_sort(ev1, ev2):
+            p1 = ev1['patchSet']
+            p2 = ev2['patchSet']
+            return cmp(p1['createdOn'], p2['createdOn'])
+
+        results = self.gerrit.bulk_query(SANITY_QUERY)
+        if results:
+            translated = []
+            for r in results:
+                if not isinstance(r, dict):
+                    continue
+                if r.get('type') == 'stats':
+                    continue
+                # Translate it into what looks like a patch-set created
+                # event and then send this via the queue to showup on the gui
+                ev = {
+                    'type': 'patchset-created',
+                    'uploader': r.pop('owner'),
+                    'patchSet': {
+                        'createdOn': r.pop('createdOn'),
+                        'lastUpdated': r.pop('lastUpdated', None),
+                    },
+                }
+                ev['change'] = dict(r)
+                translated.append(ev)
+            LOG.info("Received %s sanity check results.", len(translated))
+            for e in sorted(translated, cmp=event_sort):
+                self.queue.put(e)
+
     def _connect(self):
         try:
             if self.gerrit is None:
@@ -126,7 +157,7 @@ class GerritWatcher(threading.Thread):
             # NOTE(harlowja): only after the sanity query passes do we have
             # some level of confidence that the watcher thread will actually
             # correctly connect.
-            self.gerrit.bulk_query(SANITY_QUERY)
+            self._sanity_check()
             self.gerrit.startWatching()
             LOG.info('Start watching gerrit event stream.')
         except Exception:
@@ -263,6 +294,9 @@ def main():
 
     def on_patchset_created(event):
         change = event['change']
+        existing_change = find_change(change)
+        if existing_change:
+            return
         patch_set = event['patchSet']
         uploader = event['uploader']
         row = [
