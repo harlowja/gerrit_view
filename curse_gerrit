@@ -137,15 +137,15 @@ class GerritWatcher(threading.Thread):
             p2 = ev2['patchSet']
             return cmp(p1['createdOn'], p2['createdOn'])
 
+        fetch_am = 1
         if not self.has_prefetched:
-            q = SANITY_QUERY % (self.prefetch)
-        else:
-            q = SANITY_QUERY % (1)
-
+            fetch_am = self.prefetch
+        q = SANITY_QUERY % (fetch_am)
         LOG.info("Using '%s' for sanity query.", q)
         results = self.gerrit.bulk_query(q)
         if not self.has_prefetched:
             self.has_prefetched = True
+
         translated = []
         for r in results:
             if not isinstance(r, (dict)):
@@ -164,7 +164,11 @@ class GerritWatcher(threading.Thread):
             }
             ev['change'] = dict(r)
             translated.append(ev)
+
+        # For some reason we can get more than requested, even though
+        # we send a limit, huh??
         LOG.info("Received %s sanity check results.", len(translated))
+        translated = translated[0:fetch_am]
         for e in sorted(translated, cmp=event_sort):
             self.queue.put(e)
 
