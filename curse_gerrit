@@ -24,7 +24,7 @@ LOG = logging.getLogger(__name__)
 
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
-CONNECT_ATTEMPTS = 5
+BACKOFF_ATTEMPTS = 5
 MAX_LIST_LEN = 50
 TRUNCATE_LEN = 47  # 3 for the ...
 ALARM_FREQ = 0.5
@@ -122,6 +122,9 @@ class GerritWatcher(threading.Thread):
             if self.gerrit is None:
                 self.gerrit = gerrit.Gerrit(self.server, self.username,
                                             self.port, self.keyfile)
+            # NOTE(harlowja): only after the sanity query passes do we have
+            # some level of confidence that the watcher thread will actually
+            # correctly connect.
             self.gerrit.bulk_query(SANITY_QUERY)
             self.gerrit.startWatching()
             LOG.info('Start watching gerrit event stream.')
@@ -141,17 +144,18 @@ class GerritWatcher(threading.Thread):
     def _ensure_connected(self):
         if self.connected:
             return
-        for i in range(0, CONNECT_ATTEMPTS):
+        for i in xrange(0, BACKOFF_ATTEMPTS):
             self._connect()
             if not self.connected:
                 sleep_time = 2**i
-                LOG.warn("Trying connection again in %s seconds", sleep_time)
+                if i + 1 < BACKOFF_ATTEMPTS:
+                    LOG.warn("Trying connection again in %s seconds",
+                             sleep_time)
                 time.sleep(sleep_time)
             else:
                 break
         if not self.connected:
-            raise IOError("Could not connect to '%s' on port %s"
-                          % (self.server, self.port))
+            LOG.fatal("Could not connect to %s:%s", self.server, self.port)
 
     def _handle_event(self, event):
         LOG.debug('Placing event on producer queue: %s', event)
@@ -174,7 +178,7 @@ class GerritWatcher(threading.Thread):
 
 
 def consume_queue(queue):
-    # TODO: consume many at once instead of just one?
+    # TODO(harlowja): consume many at once instead of just one?
     events = []
     ev = None
     try:
