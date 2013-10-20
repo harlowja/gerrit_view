@@ -29,7 +29,7 @@ BACKOFF_ATTEMPTS = 5
 MAX_LIST_LEN = 50
 TRUNCATE_LEN = 60
 ALARM_FREQ = 0.5
-SANITY_QUERY = 'status:open limit:%s' % MAX_LIST_LEN
+SANITY_QUERY = 'status:open limit:%s'
 
 ### GUI CONSTANTS
 
@@ -108,15 +108,17 @@ def _get_key(k, row, truncate=False):
 
 
 class GerritWatcher(threading.Thread):
-    def __init__(self, queue, server, port, username, keyfile):
+    def __init__(self, queue, server, port, username, keyfile, prefetch):
         super(GerritWatcher, self).__init__()
         self.queue = queue
         self.keyfile = keyfile
         self.port = port
         self.server = server
         self.username = username
+        self.prefetch = prefetch
         self.daemon = True
         self.gerrit = None
+        self.has_prefetched = False
 
     def _sanity_check(self):
 
@@ -125,29 +127,35 @@ class GerritWatcher(threading.Thread):
             p2 = ev2['patchSet']
             return cmp(p1['createdOn'], p2['createdOn'])
 
-        results = self.gerrit.bulk_query(SANITY_QUERY)
-        if results:
-            translated = []
-            for r in results:
-                if not isinstance(r, dict):
-                    continue
-                if r.get('type') == 'stats':
-                    continue
-                # Translate it into what looks like a patch-set created
-                # event and then send this via the queue to showup on the gui
-                ev = {
-                    'type': 'patchset-created',
-                    'uploader': r.pop('owner'),
-                    'patchSet': {
-                        'createdOn': r.pop('createdOn'),
-                        'lastUpdated': r.pop('lastUpdated', None),
-                    },
-                }
-                ev['change'] = dict(r)
-                translated.append(ev)
-            LOG.info("Received %s sanity check results.", len(translated))
-            for e in sorted(translated, cmp=event_sort):
-                self.queue.put(e)
+        if not self.has_prefetched:
+            q = SANITY_QUERY % (self.prefetch)
+        else:
+            q = SANITY_QUERY % (1)
+
+        results = self.gerrit.bulk_query(q)
+        if not self.has_prefetched:
+            self.has_prefetched = True
+        translated = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            if r.get('type') == 'stats':
+                continue
+            # Translate it into what looks like a patch-set created
+            # event and then send this via the queue to showup on the gui
+            ev = {
+                'type': 'patchset-created',
+                'uploader': r.pop('owner'),
+                'patchSet': {
+                    'createdOn': r.pop('createdOn'),
+                    'lastUpdated': r.pop('lastUpdated', None),
+                },
+            }
+            ev['change'] = dict(r)
+            translated.append(ev)
+        LOG.info("Received %s sanity check results.", len(translated))
+        for e in sorted(translated, cmp=event_sort):
+            self.queue.put(e)
 
     def _connect(self):
         try:
@@ -256,13 +264,22 @@ def main():
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
+    parser.add_option("-i", "--items", dest="back", action='store',
+                      type="int",
+                      help="how many items to keep visible"
+                           " [default: %default]",
+                      metavar="COUNT", default=MAX_LIST_LEN)
     (options, args) = parser.parse_args()
+    if options.back <= 0:
+        parser.error("Item count must be greater or equal to one.")
 
+    back_amount = options.back
     gerrit_config = {
         'keyfile': options.keyfile,
         'port': int(options.port),
         'server': options.server,
         'username': options.username,
+        'prefetch': MAX_LIST_LEN,
     }
     event_queue = Queue.Queue()
     gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
@@ -316,7 +333,7 @@ def main():
             col_attrs.append(make_text(v))
             attr_row.append(tuple(col_attrs))
         # The list is getting to big, shrink it.
-        if len(listwalker) >= MAX_LIST_LEN:
+        if len(listwalker) >= back_amount:
             listwalker.pop()
         listwalker.insert(0, urwid.Columns(attr_row, dividechars=1))
 
