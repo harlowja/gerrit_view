@@ -35,6 +35,8 @@ urwid_ and the curses_ library)::
       -k FILE, --keyfile=FILE
                             gerrit ssh keyfile [default:
                             /home/harlowja/.ssh/id_rsa]
-
+      -i COUNT, --items=COUNT
+                            how many items to keep visible [default: 50]
+                            
 .. _urwid: http://excess.org/urwid/
 .. _curses: http://docs.python.org/2.7/library/curses.html
