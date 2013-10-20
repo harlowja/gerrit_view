@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import collections
+import functools
 import getpass
 import logging
 import optparse
@@ -332,7 +333,7 @@ def main():
             raise RuntimeError("Unknown event type: '%s'" % (event_type))
         gerrit_details[event_type] += 1
 
-    def process_gerrit():
+    def process_gerrit(loop, user_data):
         evs = consume_queue(event_queue)
         for e in evs:
             try:
@@ -349,13 +350,15 @@ def main():
             footer_text.set_text("Waiting for events...")
         else:
             footer_text.set_text("Still trying to connect...")
-        loop.event_loop.alarm(ALARM_FREQ, process_gerrit)
+
+    def on_idle(loop):
+        loop.set_alarm_in(ALARM_FREQ, process_gerrit)
 
     loop = urwid.MainLoop(frame, PALETTE,
                           handle_mouse=False,
                           unhandled_input=exit_on_q)
     gerrit_reader.start()
-    loop.event_loop.enter_idle(process_gerrit)
+    loop.event_loop.enter_idle(functools.partial(on_idle, loop))
     loop.run()
 
 
