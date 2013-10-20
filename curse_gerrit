@@ -284,7 +284,7 @@ def main():
         # The list is getting to big, shrink it.
         if len(listwalker) >= MAX_LIST_LEN:
             listwalker.pop()
-        listwalker.append(urwid.Columns(attr_row, dividechars=1))
+        listwalker.insert(0, urwid.Columns(attr_row, dividechars=1))
 
     def find_change(change):
         matched_c = None
