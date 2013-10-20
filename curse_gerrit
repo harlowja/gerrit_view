@@ -141,7 +141,7 @@ class GerritWatcher(threading.Thread):
                           % (self.server, self.port))
 
     def _handle_event(self, event):
-        LOG.info('Placing event on producer queue: %s', event)
+        LOG.debug('Placing event on producer queue: %s', event)
         self.queue.put(event)
 
     def _consume(self):
