@@ -244,10 +244,10 @@ def _get_change_status(event):
     return change_type
 
 
-###
-
 def make_text(text):
     return urwid.Text(text, wrap='any', align='left')
+
+###
 
 
 def main():
