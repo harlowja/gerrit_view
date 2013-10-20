@@ -91,7 +91,7 @@ def _get_key_path():
 
 def _get_now():
     dt = datetime.now()
-    return dt.strftime('%I:%M:%S %p %m/%d/%Y')
+    return dt.strftime('%I:%M %p %m/%d/%Y')
 
 
 def _get_date(k, row):
