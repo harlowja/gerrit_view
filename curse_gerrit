@@ -53,7 +53,7 @@ COLUMNS = (
 COLUMN_ATTRIBUTES = {
     'Created On': (urwid.WEIGHT, 0.5),
     'Status': (urwid.FIXED, 9),
-    'Username': (urwid.FIXED, 10),
+    'Username': (urwid.FIXED, 13),
     'Project': (urwid.WEIGHT, 0.5),
     'Topic': (urwid.WEIGHT, 0.33),
     'Url': (urwid.WEIGHT, 1.0),
