@@ -7,16 +7,34 @@ query_gerrit
 Use `query_gerrit` to find out what your friends have been up to::
 
     $ query_gerrit -u 'harlowja'
-
+    $ query_gerrit -h
+    
+    Usage: query_gerrit [options]
+    
+    Options:
+      -h, --help            show this help message and exit
+      -u USER, --user=USER  gather information on given USER
 
 curse_gerrit
 ------------
 
-Use `curse_gerrit` to in realtime watch the reviews showing up (powered by
-urdwi_ and the curses_ library) and to see a similar format as gerrit by
-in your terminal instead (did I mention realtime)::
+Use `curse_gerrit` to find in realtime watch the reviews showing up (powered by
+urdwi_ and the curses_ library)::
 
     $ curse_gerrit
+    $ curse_gerrit -h
+    
+    Usage: curse_gerrit [options]
+    
+    Options:
+      -h, --help            show this help message and exit
+      -u USER, --user=USER  gerrit user [default: harlowja]
+      -s SERVER, --server=SERVER
+                            gerrit server [default: review.openstack.org]
+      -p PORT, --port=PORT  gerrit port [default: 29418]
+      -k FILE, --keyfile=FILE
+                            gerrit ssh keyfile [default:
+                            /home/harlowja/.ssh/id_rsa]
 
 .. _urdwi: http://excess.org/urwid/
 .. _curses: http://docs.python.org/2.7/library/curses.html
