@@ -1,3 +1,4 @@
-urwid
 gerritlib
 prettytable
+six
+urwid

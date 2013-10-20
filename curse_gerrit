@@ -14,6 +14,7 @@ import Queue
 from datetime import datetime
 
 from gerritlib import gerrit
+import six
 import urwid
 
 logging.basicConfig(level=logging.INFO,
@@ -26,19 +27,20 @@ LOG = logging.getLogger(__name__)
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
 BACKOFF_ATTEMPTS = 5
-MAX_LIST_LEN = 50
-TRUNCATE_LEN = 60
+VISIBLE_LIST_LEN = 5
+PREFETCH_LEN = VISIBLE_LIST_LEN
 ALARM_FREQ = 0.5
 SANITY_QUERY = 'status:open limit:%s'
 
 ### GUI CONSTANTS
 
 PALETTE = (
-    ('body', urwid.WHITE, urwid.BLACK, 'standout'),
-    ('merged', urwid.LIGHT_GREEN, urwid.BLACK, 'standout'),
-    ('approved', urwid.LIGHT_GREEN, urwid.BLACK, 'standout'),
-    ('rejected', urwid.LIGHT_RED, urwid.BLACK, 'standout'),
-    ('succeeded', urwid.LIGHT_GREEN, urwid.BLACK, 'standout'),
+    ('body', urwid.DEFAULT, urwid.DEFAULT),
+    ('merged', urwid.LIGHT_CYAN, urwid.DEFAULT, 'bold'),
+    ('approved', urwid.LIGHT_GREEN, urwid.DEFAULT),
+    ('rejected', urwid.LIGHT_RED, urwid.DEFAULT, 'blink'),
+    ('succeeded', urwid.LIGHT_GREEN, urwid.DEFAULT),
+    ('open', urwid.WHITE, urwid.DEFAULT),
 )
 COLUMNS = (
     'Username',
@@ -50,13 +52,20 @@ COLUMNS = (
     'Status',
     'Comment',
 )
+COLUMN_2_IDX = dict((k, i) for (i, k) in enumerate(COLUMNS))
+COLUMN_TRUNCATES = {
+    # This determines how the columns will be trucated (at what length will
+    # truncation be forced to avoid huge strings).
+    'comment': 120,
+    'subject': 60,
+}
 COLUMN_ATTRIBUTES = {
     'Created On': (urwid.WEIGHT, 0.5),
     'Status': (urwid.FIXED, 9),
     'Username': (urwid.FIXED, 13),
     'Project': (urwid.WEIGHT, 0.5),
     'Topic': (urwid.WEIGHT, 0.33),
-    'Url': (urwid.WEIGHT, 1.0),
+    'Url': (urwid.FIXED, 35),
     'Subject': (urwid.WEIGHT, 1.0),
     'Comment': (urwid.WEIGHT, 0.7),
 }
@@ -82,7 +91,7 @@ def _get_now():
 
 
 def _get_date(k, row):
-    v = _get_key(k, row)
+    v = _get_text(k, row)
     if not v:
         return ''
     try:
@@ -92,19 +101,16 @@ def _get_date(k, row):
         return ''
 
 
-def _trunc(text):
-    if len(text) > TRUNCATE_LEN:
-        text = text[0:TRUNCATE_LEN] + "..."
-    return text
-
-
-def _get_key(k, row, truncate=False):
-    if k not in row:
+def _get_text(k, container):
+    if k not in container:
         return ""
-    v = str(row[k])
-    if truncate:
-        v = _trunc(v)
-    return v
+    text = container[k]
+    if not isinstance(text, six.string_types):
+        text = str(text)
+    max_len = COLUMN_TRUNCATES.get(k.lower())
+    if max_len is not None and len(text) > max_len:
+        text = text[0:max_len] + "..."
+    return text
 
 
 class GerritWatcher(threading.Thread):
@@ -137,7 +143,7 @@ class GerritWatcher(threading.Thread):
             self.has_prefetched = True
         translated = []
         for r in results:
-            if not isinstance(r, dict):
+            if not isinstance(r, (dict)):
                 continue
             if r.get('type') == 'stats':
                 continue
@@ -268,7 +274,7 @@ def main():
                       type="int",
                       help="how many items to keep visible"
                            " [default: %default]",
-                      metavar="COUNT", default=MAX_LIST_LEN)
+                      metavar="COUNT", default=VISIBLE_LIST_LEN)
     (options, args) = parser.parse_args()
     if options.back <= 0:
         parser.error("Item count must be greater or equal to one.")
@@ -279,14 +285,14 @@ def main():
         'port': int(options.port),
         'server': options.server,
         'username': options.username,
-        'prefetch': MAX_LIST_LEN,
+        'prefetch': PREFETCH_LEN,
     }
     event_queue = Queue.Queue()
     gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
     gerrit_details = collections.defaultdict(int)
 
-    listwalker = urwid.SimpleListWalker([])
-    listbox = urwid.ListBox(listwalker)
+    list_walker = urwid.SimpleListWalker([])
+    list_box = urwid.ListBox(list_walker)
     table_header = []
     for col_name in COLUMNS:
         col_attrs = list(COLUMN_ATTRIBUTES[col_name])
@@ -302,7 +308,7 @@ def main():
                             'body')
     footer_sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
     footer_pile = urwid.Pile([footer_sep, footer])
-    frame = urwid.LineBox(urwid.Frame(urwid.AttrWrap(listbox, 'body'),
+    frame = urwid.LineBox(urwid.Frame(urwid.AttrWrap(list_box, 'body'),
                           footer=footer_pile, header=header_pile))
 
     def exit_on_q(input):
@@ -311,20 +317,21 @@ def main():
 
     def on_patchset_created(event):
         change = event['change']
-        existing_change = find_change(change)
-        if existing_change:
+        match = find_change(change)
+        if match is not None:
+            # NOTE(harlowja): already being actively displayed
             return
         patch_set = event['patchSet']
         uploader = event['uploader']
         row = [
-            _get_key('username', uploader),
-            _get_key('topic', change),
-            _get_key('url', change),
-            _get_key('project', change),
-            _get_key('subject', change, truncate=True),
+            _get_text('username', uploader),
+            _get_text('topic', change),
+            _get_text('url', change),
+            _get_text('project', change),
+            _get_text('subject', change),
             _get_date('createdOn', patch_set),
             "",  # status
-            '',  # comment
+            "",  # comment
         ]
         attr_row = []
         for (i, v) in enumerate(row):
@@ -333,23 +340,26 @@ def main():
             col_attrs.append(make_text(v))
             attr_row.append(tuple(col_attrs))
         # The list is getting to big, shrink it.
-        if len(listwalker) >= back_amount:
-            listwalker.pop()
-        listwalker.insert(0, urwid.Columns(attr_row, dividechars=1))
+        if len(list_walker) >= back_amount:
+            list_walker.pop()
+        match = urwid.Columns(attr_row, dividechars=1)
+        set_status(match, 'Open')
+        list_walker.insert(0, match)
 
     def find_change(change):
-        matched_c = None
-        for c in listwalker:
-            url = c.contents[COLUMNS.index('Url')]
+        m_c = None
+        url_i = COLUMN_2_IDX['Url']
+        for c in list_walker:
+            url = c.contents[url_i]
             if url[0].text == change.get('url'):
-                matched_c = c
+                m_c = c
                 break
-        return matched_c
+        return m_c
 
     def set_status(match, text):
         if not text or match is None:
             return
-        status_i = COLUMNS.index('Status')
+        status_i = COLUMN_2_IDX['Status']
         new_contents = list(match.contents[status_i])
         new_contents[0] = urwid.AttrWrap(make_text(text), text.lower())
         match.contents[status_i] = tuple(new_contents)
@@ -364,9 +374,9 @@ def main():
         change = event['change']
         match = find_change(change)
         if match is not None:
-            comment = _trunc(event.get('comment', ''))
+            comment = _get_text('comment', event)
             if len(comment):
-                comment_i = COLUMNS.index('Comment')
+                comment_i = COLUMN_2_IDX['Comment']
                 match.contents[comment_i][0].set_text(comment)
             set_status(match, _get_change_status(event))
 
