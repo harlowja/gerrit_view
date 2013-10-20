@@ -41,6 +41,7 @@ PALETTE = (
     ('verified', urwid.LIGHT_GRAY, urwid.DEFAULT),
     ('restored', urwid.LIGHT_BLUE, urwid.DEFAULT),
     ('rejected', urwid.LIGHT_RED, urwid.DEFAULT, 'blink'),
+    ('failed', urwid.LIGHT_RED, urwid.DEFAULT, 'blink'),
     ('succeeded', urwid.LIGHT_GREEN, urwid.DEFAULT),
     ('open', urwid.WHITE, urwid.DEFAULT),
 )
