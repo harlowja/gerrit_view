@@ -3,6 +3,7 @@
 import collections
 import getpass
 import logging
+import optparse
 import os
 import threading
 import time
@@ -103,15 +104,15 @@ def _get_key(k, row, truncate=False):
 
 
 class GerritWatcher(threading.Thread):
-    def __init__(self, queue, **config):
+    def __init__(self, queue, server, port, username, keyfile):
         super(GerritWatcher, self).__init__()
         self.queue = queue
-        self.keyfile = config.get('keyfile', _get_key_path())
-        self.port = int(config.get('port', GERRIT_PORT))
-        self.server = str(config.get('server', GERRIT_HOST))
+        self.keyfile = keyfile
+        self.port = port
+        self.server = server
+        self.username = username
         self.connected = False
         self.daemon = True
-        self.username = config.get('username', getpass.getuser())
         self.gerrit = None
 
     def _connect(self):
@@ -193,8 +194,29 @@ def make_text(text):
 
 
 def main():
+    parser = optparse.OptionParser()
+    parser.add_option("-u", "--user", dest="username", action='store',
+                      help="gerrit user [default: %default]", metavar="USER",
+                      default=getpass.getuser())
+    parser.add_option("-s", "--server", dest="server", action='store',
+                      help="gerrit server [default: %default]",
+                      metavar="SERVER", default=GERRIT_HOST)
+    parser.add_option("-p", "--port", dest="port", action='store',
+                      type="int", help="gerrit port [default: %default]",
+                      metavar="PORT", default=GERRIT_PORT)
+    parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
+                      help="gerrit ssh keyfile [default: %default]",
+                      metavar="FILE", default=_get_key_path())
+    (options, args) = parser.parse_args()
+
+    gerrit_config = {
+        'keyfile': options.keyfile,
+        'port': int(options.port),
+        'server': options.server,
+        'username': options.username,
+    }
     event_queue = Queue.Queue()
-    gerrit_reader = GerritWatcher(event_queue)
+    gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
     gerrit_details = collections.defaultdict(int)
 
     listwalker = urwid.SimpleListWalker([])
@@ -282,17 +304,16 @@ def main():
     def process_event(event):
         if not isinstance(event, (dict)) or not 'type' in event:
             return
-        event_handlers = {
-            'patchset-created': on_patchset_created,
-            'comment-added': on_comment_added,
-            'change-merged': on_change_merged,
-        }
-        event_type = str(event.get('type'))
-        functor = event_handlers.get(event_type)
-        if not functor:
-            return
+        event_type = str(event['type'])
+        if event_type == 'patchset-created':
+            on_patchset_created(event)
+        elif event_type == 'comment-added':
+            on_comment_added(event)
+        elif event_type == 'change-merged':
+            on_change_merged(event)
+        else:
+            raise RuntimeError("Unknown event type: '%s'" % (event_type))
         gerrit_details[event_type] += 1
-        functor(event)
 
     def process_gerrit():
         evs = consume_queue(event_queue)
@@ -301,8 +322,11 @@ def main():
                 process_event(e)
             except Exception:
                 LOG.exception("Failed handling event: %s", e)
-        total_events = sum(gerrit_details.values())
-        detail_text = "%s, %s events received" % (_get_now(), total_events)
+        detail_text = "%s, %s events received (%sp, %sc, %sm)"
+        detail_text = detail_text % (_get_now(), sum(gerrit_details.values()),
+                                     gerrit_details.get('patchset-created', 0),
+                                     gerrit_details.get('comment-added', 0),
+                                     gerrit_details.get('change-merged', 0))
         footer_details.set_text(detail_text)
         loop.event_loop.alarm(ALARM_FREQ, process_gerrit)
 
