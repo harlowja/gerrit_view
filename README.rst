@@ -19,7 +19,7 @@ curse_gerrit
 ------------
 
 Use `curse_gerrit` to watch (in realtime) the reviews showing up (powered by
-urdwi_ and the curses_ library)::
+urwid_ and the curses_ library)::
 
     $ curse_gerrit
     $ curse_gerrit -h
@@ -36,5 +36,5 @@ urdwi_ and the curses_ library)::
                             gerrit ssh keyfile [default:
                             /home/harlowja/.ssh/id_rsa]
 
-.. _urdwi: http://excess.org/urwid/
+.. _urwid: http://excess.org/urwid/
 .. _curses: http://docs.python.org/2.7/library/curses.html
