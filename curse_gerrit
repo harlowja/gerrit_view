@@ -162,6 +162,7 @@ class GerritWatcher(threading.Thread):
 
 
 def consume_queue(queue):
+    # TODO: consume many at once instead of just one?
     events = []
     ev = None
     try:
