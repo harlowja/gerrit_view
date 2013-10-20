@@ -38,6 +38,8 @@ PALETTE = (
     ('body', urwid.DEFAULT, urwid.DEFAULT),
     ('merged', urwid.LIGHT_CYAN, urwid.DEFAULT, 'bold'),
     ('approved', urwid.LIGHT_GREEN, urwid.DEFAULT),
+    ('verified', urwid.LIGHT_GRAY, urwid.DEFAULT),
+    ('restored', urwid.LIGHT_BLUE, urwid.DEFAULT),
     ('rejected', urwid.LIGHT_RED, urwid.DEFAULT, 'blink'),
     ('succeeded', urwid.LIGHT_GREEN, urwid.DEFAULT),
     ('open', urwid.WHITE, urwid.DEFAULT),
@@ -57,6 +59,7 @@ COLUMN_TRUNCATES = {
     # This determines how the columns will be trucated (at what length will
     # truncation be forced to avoid huge strings).
     'comment': 120,
+    'reason': 120,
     'subject': 60,
 }
 COLUMN_ATTRIBUTES = {
@@ -224,7 +227,7 @@ class GerritWatcher(threading.Thread):
             self._consume()
 
 
-def consume_queue(queue):
+def _consume_queue(queue):
     # TODO(harlowja): consume many at once instead of just one?
     events = []
     ev = None
@@ -240,18 +243,28 @@ def consume_queue(queue):
 def _get_change_status(event):
     change_type = None
     for approval in event.get('approvals', []):
-        if (approval['type'] == 'VRIF' and approval['value'] == '-2'):
-            change_type = 'Failed'
-        if (approval['type'] == 'VRIF' and approval['value'] == '2'):
-            change_type = 'Succeeded'
-        if (approval['type'] == 'CRVW' and approval['value'] == '-2'):
-            change_type = 'Rejected'
-        if (approval['type'] == 'CRVW' and approval['value'] == '2'):
-            change_type = 'Approved'
+        if not isinstance(approval, (dict)):
+            continue
+        try:
+            approval_value = int(approval['value'])
+        except (ValueError, TypeError, KeyError):
+            approval_value = None
+        if approval.get('type') == 'VRIF':
+            if approval_value == -2:
+                change_type = 'Failed'
+            if approval_value == -1:
+                change_type = 'Verified'
+            if approval_value == 2:
+                change_type = 'Succeeded'
+        if approval.get('type') == 'CRVW':
+            if approval_value == -2:
+                change_type = 'Rejected'
+            if approval_value == 2:
+                change_type = 'Approved'
     return change_type
 
 
-def make_text(text):
+def _make_text(text):
     return urwid.Text(text, wrap='any', align='left')
 
 ###
@@ -297,7 +310,7 @@ def main():
     table_header = []
     for col_name in COLUMNS:
         col_attrs = list(COLUMN_ATTRIBUTES[col_name])
-        col_attrs.append(make_text(col_name))
+        col_attrs.append(_make_text(col_name))
         table_header.append(tuple(col_attrs))
     header_sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
     footer_text = urwid.Text("")
@@ -338,7 +351,7 @@ def main():
         for (i, v) in enumerate(row):
             col_name = COLUMNS[i]
             col_attrs = list(COLUMN_ATTRIBUTES[col_name])
-            col_attrs.append(make_text(v))
+            col_attrs.append(_make_text(v))
             attr_row.append(tuple(col_attrs))
         # The list is getting to big, shrink it.
         if len(list_walker) >= back_amount:
@@ -362,14 +375,23 @@ def main():
             return
         status_i = COLUMN_2_IDX['Status']
         new_contents = list(match.contents[status_i])
-        new_contents[0] = urwid.AttrWrap(make_text(text), text.lower())
+        new_contents[0] = urwid.AttrWrap(_make_text(text), text.lower())
         match.contents[status_i] = tuple(new_contents)
 
     def on_change_merged(event):
         change = event['change']
         match = find_change(change)
+        set_status(match, 'Merged')
+
+    def on_change_restored(event):
+        change = event['change']
+        match = find_change(change)
         if match is not None:
-            set_status(match, 'Merged')
+            reason = _get_text('reason', event)
+            if len(reason):
+                comment_i = COLUMN_2_IDX['Comment']
+                match.contents[comment_i][0].set_text(reason)
+            set_status(match, 'Restored')
 
     def on_comment_added(event):
         change = event['change']
@@ -391,22 +413,25 @@ def main():
             on_comment_added(event)
         elif event_type == 'change-merged':
             on_change_merged(event)
+        elif event_type == 'change-restored':
+            on_change_restored(event)
         else:
             raise RuntimeError("Unknown event type: '%s'" % (event_type))
         gerrit_details[event_type] += 1
 
     def process_gerrit(loop, user_data):
-        evs = consume_queue(event_queue)
+        evs = _consume_queue(event_queue)
         for e in evs:
             try:
                 process_event(e)
             except Exception:
                 LOG.exception("Failed handling event: %s", e)
-        detail_text = "%s, %s events received (%sp, %sc, %sm)"
+        detail_text = "%s, %s events received (%sp, %sc, %sm, %sr)"
         detail_text = detail_text % (_get_now(), sum(gerrit_details.values()),
                                      gerrit_details.get('patchset-created', 0),
                                      gerrit_details.get('comment-added', 0),
-                                     gerrit_details.get('change-merged', 0))
+                                     gerrit_details.get('change-merged', 0),
+                                     gerrit_details.get('change-restored', 0))
         footer_details.set_text(detail_text)
         if gerrit_reader.connected:
             footer_text.set_text("Waiting for events...")
