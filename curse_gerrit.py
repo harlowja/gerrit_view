@@ -14,7 +14,7 @@ from datetime import datetime
 from gerritlib import gerrit
 import urwid
 
-logging.basicConfig(level=logging.DEBUG, filename='output.log')
+logging.basicConfig(level=logging.INFO, filename='output.log')
 LOG = logging.getLogger(__name__)
 
 ### DEFAULT SETTINGS
@@ -57,25 +57,6 @@ COLUMN_ATTRIBUTES = {
 }
 
 ### HELPERS
-
-
-class ExponentialBackoff(object):
-    """An iterable object that will yield back an exponential delay sequence
-    provided an exponent and a number of items to yield. This object may be
-    iterated over multiple times (yielding the same sequence each time).
-    """
-    def __init__(self, attempts, exponent=2):
-        self.attempts = int(attempts)
-        self.exponent = exponent
-
-    def __iter__(self):
-        if self.attempts <= 0:
-            raise StopIteration()
-        for i in xrange(0, self.attempts):
-            yield self.exponent ** i
-
-    def __str__(self):
-        return "ExponentialBackoff: %s" % ([str(v) for v in self])
 
 
 def _get_key_path():
@@ -147,11 +128,12 @@ class GerritWatcher(threading.Thread):
     def _ensure_connected(self):
         if self.connected:
             return
-        for i in ExponentialBackoff(CONNECT_ATTEMPTS):
+        for i in range(0, CONNECT_ATTEMPTS):
             self._connect()
             if not self.connected:
-                LOG.info("Trying connection again in %s seconds", i)
-                time.sleep(i)
+                sleep_time = 2**i
+                LOG.info("Trying connection again in %s seconds", sleep_time)
+                time.sleep(sleep_time)
             else:
                 break
         if not self.connected:
