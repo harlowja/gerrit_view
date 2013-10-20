@@ -19,7 +19,11 @@ curse_gerrit
 ------------
 
 Use `curse_gerrit` to watch (in realtime) the reviews showing up (powered by
-urwid_ and the curses_ library)::
+urwid_ and the curses_ library):
+
+.. image:: https://github.com/harlowja/gerrit_view/raw/master/screenshots/screen1.png
+
+::
 
     $ curse_gerrit
     $ curse_gerrit -h
@@ -37,6 +41,7 @@ urwid_ and the curses_ library)::
                             /home/harlowja/.ssh/id_rsa]
       -i COUNT, --items=COUNT
                             how many items to keep visible [default: 50]
-                            
+
+
 .. _urwid: http://excess.org/urwid/
 .. _curses: http://docs.python.org/2.7/library/curses.html
