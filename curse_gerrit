@@ -132,7 +132,7 @@ class GerritWatcher(threading.Thread):
             self._connect()
             if not self.connected:
                 sleep_time = 2**i
-                LOG.info("Trying connection again in %s seconds", sleep_time)
+                LOG.warn("Trying connection again in %s seconds", sleep_time)
                 time.sleep(sleep_time)
             else:
                 break
