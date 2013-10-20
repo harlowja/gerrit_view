@@ -138,6 +138,7 @@ class GerritWatcher(threading.Thread):
         else:
             q = SANITY_QUERY % (1)
 
+        LOG.info("Using '%s' for sanity query.", q)
         results = self.gerrit.bulk_query(q)
         if not self.has_prefetched:
             self.has_prefetched = True
