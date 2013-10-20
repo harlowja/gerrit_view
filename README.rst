@@ -18,7 +18,7 @@ Use `query_gerrit` to find out what your friends have been up to::
 curse_gerrit
 ------------
 
-Use `curse_gerrit` to find in realtime watch the reviews showing up (powered by
+Use `curse_gerrit` to watch (in realtime) the reviews showing up (powered by
 urdwi_ and the curses_ library)::
 
     $ curse_gerrit
