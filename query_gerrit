@@ -2,6 +2,7 @@
 
 import json
 import optparse
+import os
 import subprocess
 
 from datetime import datetime
@@ -10,8 +11,8 @@ import prettytable
 
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
-BASE_CMD = ('ssh', '-p', str(GERRIT_PORT), str(GERRIT_HOST), 'gerrit',
-            'query', '--format=JSON')
+BASE_CMD_OPTS = ('-p', str(GERRIT_PORT), str(GERRIT_HOST), 'gerrit',
+                 'query', '--format=JSON')
 TRUNCATE_LEN = 27
 
 
@@ -34,9 +35,12 @@ def tiny_p(cmd, capture=True):
     return (out, err)
 
 
-def run_query(*args):
-    cmd = list(BASE_CMD)
-    cmd.extend(args)
+def run_query(query, keyfile):
+    cmd = ['ssh']
+    if keyfile and os.path.isfile(keyfile):
+        cmd.extend(['-i', str(keyfile)])
+    cmd.extend(BASE_CMD_OPTS)
+    cmd.append(query)
     (stdout, _stderr) = tiny_p(cmd)
     entries = stdout.splitlines()
     for e in entries:
@@ -111,7 +115,7 @@ def print_results(results):
             print(table.get_string(sortby="Status"))
 
 
-def get_info(users_names):
+def get_info(users_names, keyfile):
     entries = {}
     for n in sorted(list(users_names)):
         if n in entries:
@@ -126,18 +130,33 @@ def get_info(users_names):
         types = entries[n].keys()
         for t in types:
             query = "status:%s AND owner:'%s'" % (t, n)
-            entries[n][t].extend(run_query(query))
+            entries[n][t].extend(run_query(query, keyfile))
     return entries
+
+
+def _get_key_path():
+    home_dir = os.path.expanduser("~")
+    ssh_dir = os.path.join(home_dir, ".ssh")
+    if not os.path.isdir(ssh_dir):
+        return None
+    for k in ('id_rsa', 'id_dsa'):
+        path = os.path.join(ssh_dir, k)
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def main():
     parser = optparse.OptionParser()
     parser.add_option("-u", "--user", dest="users", action='append',
                       help="gather information on given USER", metavar="USER")
+    parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
+                      help="gerrit ssh keyfile [default: %default]",
+                      metavar="FILE", default=_get_key_path())
     (options, args) = parser.parse_args()
     if not options.users:
         parser.error("Users required")
-    entries = get_info(list(options.users))
+    entries = get_info(list(options.users), options.keyfile)
     print_results(entries)
 
 
