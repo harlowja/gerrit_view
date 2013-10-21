@@ -471,13 +471,14 @@ def main():
                 process_event(e)
             except Exception:
                 LOG.exception("Failed handling event: %s", e)
-        detail_text = "%s, %s events received (%sp, %sc, %sm, %sr)"
+        detail_text = "%s, %s events received (%sp, %sc, %sm, %sr, %sa)"
         detail_text = detail_text % (_format_date(),
                                      sum(gerrit_details.values()),
                                      gerrit_details.get('patchset-created', 0),
                                      gerrit_details.get('comment-added', 0),
                                      gerrit_details.get('change-merged', 0),
-                                     gerrit_details.get('change-restored', 0))
+                                     gerrit_details.get('change-restored', 0),
+                                     gerrit_details.get('change-abandoned', 0))
         footer_details.set_text(detail_text)
         if gerrit_reader.connected:
             footer_text.set_text("Waiting for events...")
