@@ -14,6 +14,9 @@ Use `query_gerrit` to find out what your friends have been up to::
     Options:
       -h, --help            show this help message and exit
       -u USER, --user=USER  gather information on given USER
+      -k FILE, --keyfile=FILE
+                            gerrit ssh keyfile [default:
+                            /homes/harlowja/.ssh/id_rsa]
 
 curse_gerrit
 ------------
