@@ -77,6 +77,8 @@ COLUMN_ATTRIBUTES = {
 }
 HIGHLIGHT_WORDS = {
     # These words get special colored highlighting.
+    #
+    # word -> palette name
     'succeeded': 'succeeded',
     'success': 'succeeded',
     'successful': 'succeeded',
