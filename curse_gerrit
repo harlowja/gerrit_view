@@ -342,7 +342,7 @@ def main():
         col_attrs.append(_make_text(col_name))
         table_header.append(tuple(col_attrs))
     header_sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
-    footer_text = urwid.Text("")
+    footer_text = urwid.Text("Initializing...")
     table_header = urwid.AttrWrap(urwid.Columns(table_header, dividechars=1),
                                   'body')
     header_pile = urwid.Pile([table_header, header_sep])
@@ -482,10 +482,13 @@ def main():
                                      gerrit_details.get('change-restored', 0),
                                      gerrit_details.get('change-abandoned', 0))
         footer_details.set_text(detail_text)
-        if gerrit_reader.connected:
-            footer_text.set_text("Waiting for events...")
-        else:
-            footer_text.set_text("Still trying to connect...")
+        if gerrit_reader.is_alive():
+            if not gerrit_reader.has_prefetched:
+                footer_text.set_text("Prefetching...")
+            elif gerrit_reader.connected:
+                footer_text.set_text("Waiting for events...")
+            else:
+                footer_text.set_text("Still trying to connect...")
 
     def on_idle(loop):
         loop.set_alarm_in(ALARM_FREQ, process_gerrit)
