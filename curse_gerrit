@@ -6,6 +6,7 @@ import getpass
 import logging
 import optparse
 import os
+import re
 import threading
 import time
 
@@ -40,8 +41,8 @@ PALETTE = (
     ('approved', urwid.LIGHT_GREEN, urwid.DEFAULT),
     ('verified', urwid.LIGHT_GRAY, urwid.DEFAULT),
     ('restored', urwid.LIGHT_BLUE, urwid.DEFAULT),
-    ('rejected', urwid.LIGHT_RED, urwid.DEFAULT, 'blink'),
-    ('failed', urwid.LIGHT_RED, urwid.DEFAULT, 'blink'),
+    ('rejected', urwid.LIGHT_RED, urwid.DEFAULT, 'bold'),
+    ('failed', urwid.LIGHT_RED, urwid.DEFAULT, 'bold'),
     ('succeeded', urwid.LIGHT_GREEN, urwid.DEFAULT),
     ('open', urwid.WHITE, urwid.DEFAULT),
 )
@@ -73,8 +74,30 @@ COLUMN_ATTRIBUTES = {
     'Subject': (urwid.WEIGHT, 1.0),
     'Comment': (urwid.WEIGHT, 0.7),
 }
+HIGHLIGHT_WORDS = {
+    # These words get special colored highlighting.
+    'succeeded': 'succeeded',
+    'SUCCESS': 'succeeded',
+    'FAILURE': 'failed',
+    'failed': 'failed',
+    'fails': 'failed',
+}
 
 ### HELPERS
+
+
+def _format_text(text):
+    text_pieces = []
+    for t in re.split(r"([\s.\-,!])", text):
+        if t.lower() in HIGHLIGHT_WORDS:
+            text_pieces.append((HIGHLIGHT_WORDS[t.lower()], t))
+        else:
+            text_pieces.append(t)
+    return urwid.Text(text_pieces, wrap='any', align='left')
+
+
+def _make_text(text):
+    return urwid.Text(text, wrap='any', align='left')
 
 
 def _get_key_path():
@@ -269,9 +292,6 @@ def _get_change_status(event):
     return change_type
 
 
-def _make_text(text):
-    return urwid.Text(text, wrap='any', align='left')
-
 ###
 
 
@@ -356,7 +376,7 @@ def main():
         for (i, v) in enumerate(row):
             col_name = COLUMNS[i]
             col_attrs = list(COLUMN_ATTRIBUTES[col_name])
-            col_attrs.append(_make_text(v))
+            col_attrs.append(_format_text(v))
             attr_row.append(tuple(col_attrs))
         # The list is getting to big, shrink it.
         if len(list_walker) >= back_amount:
@@ -395,7 +415,9 @@ def main():
             reason = _get_text('reason', event)
             if len(reason):
                 comment_i = COLUMN_2_IDX['Comment']
-                match.contents[comment_i][0].set_text(reason)
+                new_column = list(match.contents[comment_i])
+                new_column[0] = _format_text(reason)
+                match.contents[comment_i] = tuple(new_column)
             set_status(match, 'Restored')
 
     def on_comment_added(event):
@@ -405,7 +427,9 @@ def main():
             comment = _get_text('comment', event)
             if len(comment):
                 comment_i = COLUMN_2_IDX['Comment']
-                match.contents[comment_i][0].set_text(comment)
+                new_column = list(match.contents[comment_i])
+                new_column[0] = _format_text(comment)
+                match.contents[comment_i] = tuple(new_column)
             set_status(match, _get_change_status(event))
 
     def process_event(event):
