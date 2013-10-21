@@ -97,7 +97,7 @@ def _format_text(text):
             text_pieces.append((HIGHLIGHT_WORDS[t.lower()], t))
         else:
             text_pieces.append(t)
-    return urwid.Text(text_pieces, wrap='any', align='left')
+    return _make_text(text_pieces)
 
 
 def _make_text(text):
