@@ -77,8 +77,8 @@ COLUMN_ATTRIBUTES = {
 HIGHLIGHT_WORDS = {
     # These words get special colored highlighting.
     'succeeded': 'succeeded',
-    'SUCCESS': 'succeeded',
-    'FAILURE': 'failed',
+    'success': 'succeeded',
+    'failure': 'failed',
     'failed': 'failed',
     'fails': 'failed',
 }
