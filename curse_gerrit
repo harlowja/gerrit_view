@@ -483,12 +483,10 @@ def main():
                                      gerrit_details.get('change-abandoned', 0))
         footer_details.set_text(detail_text)
         if gerrit_reader.is_alive():
-            if not gerrit_reader.has_prefetched:
-                footer_text.set_text("Prefetching...")
-            elif gerrit_reader.connected:
-                footer_text.set_text("Waiting for events...")
+            if not gerrit_reader.connected:
+                footer_text.set_text("Connecting & prefetching...")
             else:
-                footer_text.set_text("Still trying to connect...")
+                footer_text.set_text("Waiting for events...")
 
     def on_idle(loop):
         loop.set_alarm_in(ALARM_FREQ, process_gerrit)
