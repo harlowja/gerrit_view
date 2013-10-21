@@ -39,6 +39,7 @@ PALETTE = (
     ('body', urwid.DEFAULT, urwid.DEFAULT),
     ('merged', urwid.LIGHT_CYAN, urwid.DEFAULT, 'bold'),
     ('approved', urwid.LIGHT_GREEN, urwid.DEFAULT),
+    ('abandoned', urwid.YELLOW, urwid.DEFAULT),
     ('verified', urwid.LIGHT_GRAY, urwid.DEFAULT),
     ('restored', urwid.LIGHT_BLUE, urwid.DEFAULT),
     ('rejected', urwid.LIGHT_RED, urwid.DEFAULT, 'bold'),
@@ -433,6 +434,18 @@ def main():
                 match.contents[comment_i] = tuple(new_column)
             set_status(match, _get_change_status(event))
 
+    def on_change_abandoned(event):
+        change = event['change']
+        match = find_change(change)
+        if match is not None:
+            reason = _get_text('reason', event)
+            if len(reason):
+                comment_i = COLUMN_2_IDX['Comment']
+                new_column = list(match.contents[comment_i])
+                new_column[0] = _format_text(reason)
+                match.contents[comment_i] = tuple(new_column)
+            set_status(match, 'Abandoned')
+
     def process_event(event):
         if not isinstance(event, (dict)) or not 'type' in event:
             return
@@ -446,6 +459,8 @@ def main():
             on_change_merged(event)
         elif event_type == 'change-restored':
             on_change_restored(event)
+        elif event_type == 'change-abandoned':
+            on_change_abandoned(event)
         else:
             raise RuntimeError("Unknown event type: '%s'" % (event_type))
 
