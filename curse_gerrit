@@ -57,7 +57,6 @@ COLUMNS = (
     'Status',
     'Comment',
 )
-COLUMN_2_IDX = dict((k, i) for (i, k) in enumerate(COLUMNS))
 COLUMN_TRUNCATES = {
     # This determines how the columns will be trucated (at what length will
     # truncation be forced to avoid huge strings).
@@ -297,12 +296,15 @@ def _get_change_status(event):
 
 
 class ReviewTable(urwid.ListBox):
-    def __init__(self, columns, max_size):
+    def __init__(self, max_size=1):
         super(ReviewTable, self).__init__(urwid.SimpleListWalker([]))
-        assert len(columns) > 0, "Column length must be > 0"
         assert int(max_size) > 0, "Max size must be > 0"
-        self._columns = tuple(columns)
+        self._columns = tuple(COLUMNS)
+        self._column_attributes = dict(COLUMN_ATTRIBUTES)
         self._max_size = int(max_size)
+        self._header = None
+        self._footer_pieces = [None, None]
+        self._column_2_idx = dict((k, i) for (i, k) in enumerate(COLUMNS))
 
     @property
     def columns(self):
@@ -312,7 +314,41 @@ class ReviewTable(urwid.ListBox):
     def max_size(self):
         return self._max_size
 
-    def add_row(self, column):
+    @property
+    def header(self):
+        if self._header is None:
+            table_header = []
+            for col_name in self.columns:
+                try:
+                    col_attrs = list(self._column_attributes[col_name])
+                except (KeyError, TypeError):
+                    col_attrs = []
+                col_attrs.append(_make_text(col_name))
+                table_header.append(tuple(col_attrs))
+            self._header = table_header
+        cols = urwid.Columns(self._header, dividechars=1)
+        sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
+        return urwid.Pile([urwid.AttrWrap(cols, 'body'), sep])
+
+    @property
+    def right_footer(self):
+        if self._footer_pieces[1] is None:
+            self._footer_pieces[1] = urwid.Text('', align='right')
+        return self._footer_pieces[1]
+
+    @property
+    def left_footer(self):
+        if self._footer_pieces[0] is None:
+            self._footer_pieces[0] = urwid.Text('', align='left')
+        return self._footer_pieces[0]
+
+    @property
+    def footer(self):
+        sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
+        cols = urwid.Columns([self.left_footer, self.right_footer])
+        return urwid.Pile([sep, urwid.AttrWrap(cols, 'body')])
+
+    def _add_row(self, column):
         if len(column.contents) != len(self.columns):
             raise RuntimeError("Attempt to add a row with differing"
                                " column count")
@@ -320,6 +356,98 @@ class ReviewTable(urwid.ListBox):
         if len(self.body) >= self.max_size:
             self.body.pop()
         self.body.insert(0, column)
+
+    def _find_change(self, change):
+        url_i = self._column_2_idx['Url']
+        m_c = None
+        for c in self.body:
+            url = c.contents[url_i]
+            if url[0].text == change.get('url'):
+                m_c = c
+                break
+        return m_c
+
+    def _set_status(self, match, text):
+        if not text or match is None:
+            return None
+        status_i = self._column_2_idx['Status']
+        new_contents = list(match.contents[status_i])
+        new_contents[0] = urwid.AttrWrap(_make_text(text), text.lower())
+        match.contents[status_i] = tuple(new_contents)
+        return match
+
+    def on_change_merged(self, event):
+        change = event['change']
+        match = self._find_change(change)
+        if match is not None:
+            self._set_status(match, 'Merged')
+
+    def on_change_restored(self, event):
+        change = event['change']
+        match = self._find_change(change)
+        if match is not None:
+            reason = _get_text('reason', event)
+            if len(reason):
+                comment_i = self._column_2_idx['Comment']
+                new_column = list(match.contents[comment_i])
+                new_column[0] = _format_text(reason)
+                match.contents[comment_i] = tuple(new_column)
+            self._set_status(match, 'Restored')
+
+    def on_comment_added(self, event):
+        change = event['change']
+        match = self._find_change(change)
+        if match is not None:
+            comment = _get_text('comment', event)
+            if len(comment):
+                comment_i = self._column_2_idx['Comment']
+                new_column = list(match.contents[comment_i])
+                new_column[0] = _format_text(comment)
+                match.contents[comment_i] = tuple(new_column)
+            self._set_status(match, _get_change_status(event))
+
+    def on_change_abandoned(self, event):
+        change = event['change']
+        match = self._find_change(change)
+        if match is not None:
+            reason = _get_text('reason', event)
+            if len(reason):
+                comment_i = self._column_2_idx['Comment']
+                new_column = list(match.contents[comment_i])
+                new_column[0] = _format_text(reason)
+                match.contents[comment_i] = tuple(new_column)
+            self._set_status(match, 'Abandoned')
+
+    def on_patchset_created(self, event):
+        change = event['change']
+        match = self._find_change(change)
+        if match is not None:
+            # NOTE(harlowja): already being actively displayed
+            return
+        patch_set = event['patchSet']
+        uploader = event['uploader']
+        row = [
+            _get_text('username', uploader),
+            _get_text('topic', change),
+            _get_text('url', change),
+            _get_text('project', change),
+            _get_text('subject', change),
+            _get_date('createdOn', patch_set),
+            "",  # status
+            "",  # comment
+        ]
+        attr_row = []
+        for (i, v) in enumerate(row):
+            col_name = self.columns[i]
+            try:
+                col_attrs = list(self._column_attributes[col_name])
+            except (KeyError, TypeError):
+                col_attrs = []
+            col_attrs.append(_format_text(v))
+            attr_row.append(tuple(col_attrs))
+        cols = urwid.Columns(attr_row, dividechars=1)
+        self._set_status(cols, 'Open')
+        self._add_row(cols)
 
 ###
 
@@ -350,7 +478,6 @@ def main():
     if options.back <= 0:
         parser.error("Item count must be greater or equal to one.")
 
-    back_amount = options.back
     gerrit_config = {
         'keyfile': options.keyfile,
         'port': int(options.port),
@@ -362,24 +489,11 @@ def main():
     gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
     gerrit_details = collections.defaultdict(int)
 
-    review_table = ReviewTable(COLUMNS, back_amount)
-    table_header = []
-    for col_name in COLUMNS:
-        col_attrs = list(COLUMN_ATTRIBUTES[col_name])
-        col_attrs.append(_make_text(col_name))
-        table_header.append(tuple(col_attrs))
-    header_sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
-    footer_text = urwid.Text("Initializing...")
-    table_header = urwid.AttrWrap(urwid.Columns(table_header, dividechars=1),
-                                  'body')
-    header_pile = urwid.Pile([table_header, header_sep])
-    footer_details = urwid.Text('', align='right')
-    footer = urwid.AttrWrap(urwid.Columns([footer_text, footer_details]),
-                            'body')
-    footer_sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
-    footer_pile = urwid.Pile([footer_sep, footer])
-    frame = urwid.LineBox(urwid.Frame(urwid.AttrWrap(review_table, 'body'),
-                          footer=footer_pile, header=header_pile))
+    review_table = ReviewTable(max_size=options.back)
+    review_table.left_footer.set_text("Initializing...")
+    frame = urwid.Frame(urwid.AttrWrap(review_table, 'body'),
+                        footer=review_table.footer,
+                        header=review_table.header)
 
     def filter_event(event):
         if len(options.projects) == 0:
@@ -397,93 +511,6 @@ def main():
         if key in ('q', 'Q', 'esc'):
             raise urwid.ExitMainLoop()
 
-    def on_patchset_created(event):
-        change = event['change']
-        match = find_change(change)
-        if match is not None:
-            # NOTE(harlowja): already being actively displayed
-            return
-        patch_set = event['patchSet']
-        uploader = event['uploader']
-        row = [
-            _get_text('username', uploader),
-            _get_text('topic', change),
-            _get_text('url', change),
-            _get_text('project', change),
-            _get_text('subject', change),
-            _get_date('createdOn', patch_set),
-            "",  # status
-            "",  # comment
-        ]
-        attr_row = []
-        for (i, v) in enumerate(row):
-            col_name = COLUMNS[i]
-            col_attrs = list(COLUMN_ATTRIBUTES[col_name])
-            col_attrs.append(_format_text(v))
-            attr_row.append(tuple(col_attrs))
-        match = urwid.Columns(attr_row, dividechars=1)
-        set_status(match, 'Open')
-        review_table.add_row(match)
-
-    def find_change(change):
-        m_c = None
-        url_i = COLUMN_2_IDX['Url']
-        for c in review_table.body:
-            url = c.contents[url_i]
-            if url[0].text == change.get('url'):
-                m_c = c
-                break
-        return m_c
-
-    def set_status(match, text):
-        if not text or match is None:
-            return
-        status_i = COLUMN_2_IDX['Status']
-        new_contents = list(match.contents[status_i])
-        new_contents[0] = urwid.AttrWrap(_make_text(text), text.lower())
-        match.contents[status_i] = tuple(new_contents)
-
-    def on_change_merged(event):
-        change = event['change']
-        match = find_change(change)
-        set_status(match, 'Merged')
-
-    def on_change_restored(event):
-        change = event['change']
-        match = find_change(change)
-        if match is not None:
-            reason = _get_text('reason', event)
-            if len(reason):
-                comment_i = COLUMN_2_IDX['Comment']
-                new_column = list(match.contents[comment_i])
-                new_column[0] = _format_text(reason)
-                match.contents[comment_i] = tuple(new_column)
-            set_status(match, 'Restored')
-
-    def on_comment_added(event):
-        change = event['change']
-        match = find_change(change)
-        if match is not None:
-            comment = _get_text('comment', event)
-            if len(comment):
-                comment_i = COLUMN_2_IDX['Comment']
-                new_column = list(match.contents[comment_i])
-                new_column[0] = _format_text(comment)
-                match.contents[comment_i] = tuple(new_column)
-            set_status(match, _get_change_status(event))
-
-    def on_change_abandoned(event):
-        change = event['change']
-        match = find_change(change)
-        if match is not None:
-            reason = _get_text('reason', event)
-            if len(reason):
-                comment_i = COLUMN_2_IDX['Comment']
-                new_column = list(match.contents[comment_i])
-                new_column[0] = _format_text(reason)
-                match.contents[comment_i] = tuple(new_column)
-            set_status(match, 'Abandoned')
-
     def process_event(event):
         if not isinstance(event, (dict)) or not 'type' in event:
             return
@@ -492,15 +519,15 @@ def main():
         event_type = str(event['type'])
         gerrit_details[event_type] += 1
         if event_type == 'patchset-created':
-            on_patchset_created(event)
+            review_table.on_patchset_created(event)
         elif event_type == 'comment-added':
-            on_comment_added(event)
+            review_table.on_comment_added(event)
         elif event_type == 'change-merged':
-            on_change_merged(event)
+            review_table.on_change_merged(event)
         elif event_type == 'change-restored':
-            on_change_restored(event)
+            review_table.on_change_restored(event)
         elif event_type == 'change-abandoned':
-            on_change_abandoned(event)
+            review_table.on_change_abandoned(event)
         else:
             raise RuntimeError("Unknown event type: '%s'" % (event_type))
 
@@ -519,23 +546,26 @@ def main():
                                      gerrit_details.get('change-merged', 0),
                                      gerrit_details.get('change-restored', 0),
                                      gerrit_details.get('change-abandoned', 0))
-        footer_details.set_text(detail_text)
+        review_table.right_footer.set_text(detail_text)
         if gerrit_reader.is_alive():
             if not gerrit_reader.connected:
                 if not gerrit_reader.has_prefetched:
-                    footer_text.set_text("Connecting & prefetching...")
+                    review_table.left_footer.set_text("Connecting & "
+                                                      "prefetching...")
                 else:
-                    footer_text.set_text("Connecting...")
+                    review_table.left_footer.set_text("Connecting...")
             else:
                 if len(evs) == 0:
-                    footer_text.set_text("Waiting for events...")
+                    review_table.left_footer.set_text("Waiting for events...")
                 else:
-                    footer_text.set_text("Processing events...")
+                    review_table.left_footer.set_text("Processing events...")
+        else:
+            review_table.left_footer.set_text("Initializing...")
 
     def on_idle(loop):
         loop.set_alarm_in(ALARM_FREQ, process_gerrit)
 
-    loop = urwid.MainLoop(frame, PALETTE,
+    loop = urwid.MainLoop(urwid.LineBox(frame), PALETTE,
                           handle_mouse=False,
                           unhandled_input=on_unhandled_input)
     gerrit_reader.start()
