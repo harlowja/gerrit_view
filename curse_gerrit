@@ -338,6 +338,9 @@ def main():
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
+    parser.add_option("--project", dest="projects", action='append',
+                      help="only show given projects reviews",
+                      metavar="PROJECT", default=[])
     parser.add_option("-i", "--items", dest="back", action='store',
                       type="int",
                       help="how many items to keep visible"
@@ -377,6 +380,18 @@ def main():
     footer_pile = urwid.Pile([footer_sep, footer])
     frame = urwid.LineBox(urwid.Frame(urwid.AttrWrap(review_table, 'body'),
                           footer=footer_pile, header=header_pile))
+
+    def filter_event(event):
+        if len(options.projects) == 0:
+            return False
+        project = None
+        try:
+            project = event['change']['project']
+        except (KeyError, TypeError, ValueError):
+            pass
+        if project in options.projects:
+            return False
+        return True
 
     def on_unhandled_input(key):
         if key in ('q', 'Q', 'esc'):
@@ -474,6 +489,8 @@ def main():
             return
         event_type = str(event['type'])
         gerrit_details[event_type] += 1
+        if filter_event(event):
+            return
         if event_type == 'patchset-created':
             on_patchset_created(event)
         elif event_type == 'comment-added':

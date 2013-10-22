@@ -42,6 +42,7 @@ urwid_ and the curses_ library):
       -k FILE, --keyfile=FILE
                             gerrit ssh keyfile [default:
                             /home/harlowja/.ssh/id_rsa]
+      --project=PROJECT     only show given projects reviews
       -i COUNT, --items=COUNT
                             how many items to keep visible [default: 50]
 
