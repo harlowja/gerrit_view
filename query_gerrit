@@ -11,8 +11,7 @@ import prettytable
 
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
-BASE_CMD_OPTS = ('-p', str(GERRIT_PORT), str(GERRIT_HOST), 'gerrit',
-                 'query', '--format=JSON')
+GERRIT_CMD = ('gerrit', 'query', '--format=JSON')
 TRUNCATE_LEN = 27
 
 
@@ -35,11 +34,13 @@ def tiny_p(cmd, capture=True):
     return (out, err)
 
 
-def run_query(query, keyfile):
+def run_query(names, query, keyfile):
     cmd = ['ssh']
     if keyfile and os.path.isfile(keyfile):
         cmd.extend(['-i', str(keyfile)])
+    BASE_CMD_OPTS = (names[0]+'@'+GERRIT_HOST, '-p', str(GERRIT_PORT))
     cmd.extend(BASE_CMD_OPTS)
+    cmd.extend(GERRIT_CMD)
     cmd.append(query)
     (stdout, _stderr) = tiny_p(cmd)
     entries = stdout.splitlines()
@@ -130,7 +131,7 @@ def get_info(users_names, keyfile):
         types = entries[n].keys()
         for t in types:
             query = "status:%s AND owner:'%s'" % (t, n)
-            entries[n][t].extend(run_query(query, keyfile))
+            entries[n][t].extend(run_query(users_names, query, keyfile))
     return entries
 
 
