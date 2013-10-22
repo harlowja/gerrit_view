@@ -39,6 +39,7 @@ urwid_ and the curses_ library):
       -s SERVER, --server=SERVER
                             gerrit server [default: review.openstack.org]
       -p PORT, --port=PORT  gerrit port [default: 29418]
+      --prefetch=COUNT      prefetch amount [default: 50]
       -k FILE, --keyfile=FILE
                             gerrit ssh keyfile [default:
                             /home/harlowja/.ssh/id_rsa]
