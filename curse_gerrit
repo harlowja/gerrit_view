@@ -296,9 +296,9 @@ def _get_change_status(event):
     return change_type
 
 
-class SortableTable(urwid.ListBox):
+class UrwidTable(urwid.ListBox):
     def __init__(self, columns, max_size):
-        super(SortableTable, self).__init__(urwid.SimpleListWalker([]))
+        super(UrwidTable, self).__init__(urwid.SimpleListWalker([]))
         assert len(columns) > 0, "Column length must be > 0"
         assert int(max_size) > 0, "Max size must be > 0"
         self._columns = tuple(columns)
@@ -362,7 +362,7 @@ def main():
     gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
     gerrit_details = collections.defaultdict(int)
 
-    review_table = SortableTable(COLUMNS, back_amount)
+    review_table = UrwidTable(COLUMNS, back_amount)
     table_header = []
     for col_name in COLUMNS:
         col_attrs = list(COLUMN_ATTRIBUTES[col_name])
