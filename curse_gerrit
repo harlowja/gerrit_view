@@ -487,10 +487,10 @@ def main():
     def process_event(event):
         if not isinstance(event, (dict)) or not 'type' in event:
             return
-        event_type = str(event['type'])
-        gerrit_details[event_type] += 1
         if filter_event(event):
             return
+        event_type = str(event['type'])
+        gerrit_details[event_type] += 1
         if event_type == 'patchset-created':
             on_patchset_created(event)
         elif event_type == 'comment-added':
