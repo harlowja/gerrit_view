@@ -124,11 +124,11 @@ def _format_date(when=None):
 def _get_date(k, row):
     v = _get_text(k, row)
     if not v:
-        return ''
+        return None
     try:
-        return _format_date(datetime.fromtimestamp(int(v)))
+        return datetime.fromtimestamp(int(v))
     except (ValueError, TypeError):
-        return ''
+        return None
 
 
 def _get_text(k, container):
@@ -295,6 +295,14 @@ def _get_change_status(event):
     return change_type
 
 
+class ReviewDate(urwid.Text):
+    def __init__(self, when=None):
+        super(ReviewDate, self).__init__('')
+        self.when = when
+        if when is not None:
+            self.set_text(_format_date(when))
+
+
 class ReviewTable(urwid.ListBox):
     def __init__(self, max_size=1):
         super(ReviewTable, self).__init__(urwid.SimpleListWalker([]))
@@ -303,8 +311,66 @@ class ReviewTable(urwid.ListBox):
         self._column_attributes = dict(COLUMN_ATTRIBUTES)
         self._max_size = int(max_size)
         self._header = None
-        self._footer_pieces = [None, None]
+        self._footer_pieces = [None, None, None]
         self._column_2_idx = dict((k, i) for (i, k) in enumerate(COLUMNS))
+        self._sort_by = [
+            (None, None),  # no sorting
+            ('Created On (Desc)', self._sort_date("Created On", False)),
+            ('Created On (Asc)', self._sort_date("Created On", True)),
+            ('Subject (Desc)', self._sort_text("Subject", False)),
+            ('Subject (Asc)', self._sort_text("Subject", True)),
+            ('Username (Desc)', self._sort_text("Username", False)),
+            ('Username (Asc)', self._sort_text("Username", True)),
+            ('Project (Desc)', self._sort_text("Project", False)),
+            ('Project (Asc)', self._sort_text("Project", True)),
+            ('Topic (Desc)', self._sort_text("Topic", False)),
+            ('Topic (Asc)', self._sort_text("Topic", True)),
+        ]
+        self._sort_idx = 0
+        self._rows = []
+
+    def _sort_text(self, col_name, asc):
+        col_idx = self._column_2_idx[col_name]
+        flip_map = {
+            0: 0,
+            -1: 1,
+            1: -1,
+        }
+
+        def sorter(i1, i2):
+            t1 = i1.contents[col_idx][0]
+            t2 = i2.contents[col_idx][0]
+            r = cmp(t1.text, t2.text)
+            if not asc:
+                r = flip_map[r]
+            return r
+
+        return sorter
+
+    def _sort_date(self, col_name, asc):
+        col_idx = self._column_2_idx[col_name]
+        flip_map = {
+            0: 0,
+            -1: 1,
+            1: -1,
+        }
+
+        def sorter(i1, i2):
+            d1 = i1.contents[col_idx][0]
+            d2 = i2.contents[col_idx][0]
+            if d1.when is None and d2.when is None:
+                r = 0
+            if d1.when is None and d2.when is not None:
+                r = -1
+            if d1.when is not None and d2.when is None:
+                r = 1
+            if d1.when is not None and d2.when is not None:
+                r = cmp(d1.when, d2.when)
+            if not asc:
+                r = flip_map[r]
+            return r
+
+        return sorter
 
     @property
     def columns(self):
@@ -332,9 +398,9 @@ class ReviewTable(urwid.ListBox):
 
     @property
     def right_footer(self):
-        if self._footer_pieces[1] is None:
-            self._footer_pieces[1] = urwid.Text('', align='right')
-        return self._footer_pieces[1]
+        if self._footer_pieces[2] is None:
+            self._footer_pieces[2] = urwid.Text('', align='right')
+        return self._footer_pieces[2]
 
     @property
     def left_footer(self):
@@ -343,19 +409,36 @@ class ReviewTable(urwid.ListBox):
         return self._footer_pieces[0]
 
     @property
+    def center_footer(self):
+        if self._footer_pieces[1] is None:
+            self._footer_pieces[1] = urwid.Text('', align='center')
+        return self._footer_pieces[1]
+
+    @property
     def footer(self):
         sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
-        cols = urwid.Columns([self.left_footer, self.right_footer])
+        footer_pieces = [
+            self.left_footer,
+            self.center_footer,
+            self.right_footer,
+        ]
+        cols = urwid.Columns(footer_pieces)
         return urwid.Pile([sep, urwid.AttrWrap(cols, 'body')])
 
-    def _add_row(self, column):
-        if len(column.contents) != len(self.columns):
+    def _add_row(self, row):
+        if len(row.contents) != len(self.columns):
             raise RuntimeError("Attempt to add a row with differing"
                                " column count")
-        # Will adding it push over our limit?
-        if len(self.body) >= self.max_size:
-            self.body.pop()
-        self.body.insert(0, column)
+        if len(self._rows) >= self.max_size:
+            self._rows.pop()
+        self._rows.insert(0, row)
+        (_sort_title, sort_functor) = self._sort_by[self._sort_idx]
+        if sort_functor:
+            self._refill(sorted(self._rows, cmp=sort_functor))
+        else:
+            if len(self.body) >= self.max_size:
+                self.body.pop()
+            self.body.insert(0, row)
 
     def _find_change(self, change):
         url_i = self._column_2_idx['Url']
@@ -432,7 +515,7 @@ class ReviewTable(urwid.ListBox):
             _get_text('url', change),
             _get_text('project', change),
             _get_text('subject', change),
-            _get_date('createdOn', patch_set),
+            ReviewDate(_get_date('createdOn', patch_set)),
             "",  # status
             "",  # comment
         ]
@@ -443,11 +526,36 @@ class ReviewTable(urwid.ListBox):
                 col_attrs = list(self._column_attributes[col_name])
             except (KeyError, TypeError):
                 col_attrs = []
-            col_attrs.append(_format_text(v))
+            if not isinstance(v, urwid.Text):
+                col_attrs.append(_format_text(v))
+            else:
+                col_attrs.append(v)
             attr_row.append(tuple(col_attrs))
         cols = urwid.Columns(attr_row, dividechars=1)
         self._set_status(cols, 'Open')
         self._add_row(cols)
+
+    def _refill(self, new_body):
+        while len(self.body):
+            self.body.pop()
+        self.body.extend(new_body)
+
+    def keypress(self, size, key):
+        handled = super(ReviewTable, self).keypress(size, key)
+        if handled is None:
+            return None
+        if key in ('s', 'S'):
+            self._sort_idx += 1
+            self._sort_idx = self._sort_idx % len(self._sort_by)
+            (sort_title, sort_functor) = self._sort_by[self._sort_idx]
+            if not all([sort_title, sort_functor]):
+                self.center_footer.set_text("")
+                self._refill(self._rows)
+            else:
+                self.center_footer.set_text("Sort: %s" % (sort_title))
+                self._refill(sorted(self._rows, cmp=sort_functor))
+            return None
+        return key
 
 ###
 
