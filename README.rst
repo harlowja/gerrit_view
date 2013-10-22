@@ -1,15 +1,15 @@
 **Gerrit viewers & tools for all**
 ==================================
 
-query_gerrit
+qgerrit
 ------------
 
-Use `query_gerrit` to find out what your friends have been up to::
+Use `qgerrit` to find out what your friends have been up to::
 
-    $ query_gerrit -u 'harlowja'
-    $ query_gerrit -h
+    $ qgerrit -u 'harlowja'
+    $ qgerrit -h
     
-    Usage: query_gerrit [options]
+    Usage: qgerrit [options]
     
     Options:
       -h, --help            show this help message and exit
@@ -18,20 +18,20 @@ Use `query_gerrit` to find out what your friends have been up to::
                             gerrit ssh keyfile [default:
                             /homes/harlowja/.ssh/id_rsa]
 
-curse_gerrit
+cgerrit
 ------------
 
-Use `curse_gerrit` to watch (in realtime) the reviews showing up (powered by
+Use `cgerrit` to watch (in realtime) the reviews showing up (powered by
 urwid_ and the curses_ library):
 
 .. image:: https://github.com/harlowja/gerrit_view/raw/master/screenshots/screen1.png
 
 ::
 
-    $ curse_gerrit
-    $ curse_gerrit -h
+    $ cgerrit
+    $ cgerrit -h
     
-    Usage: curse_gerrit [options]
+    Usage: cgerrit [options]
     
     Options:
       -h, --help            show this help message and exit
