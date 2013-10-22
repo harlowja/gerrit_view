@@ -296,6 +296,31 @@ def _get_change_status(event):
     return change_type
 
 
+class SortableTable(urwid.ListBox):
+    def __init__(self, columns, max_size):
+        super(SortableTable, self).__init__(urwid.SimpleListWalker([]))
+        assert len(columns) > 0, "Column length must be > 0"
+        assert int(max_size) > 0, "Max size must be > 0"
+        self._columns = tuple(columns)
+        self._max_size = int(max_size)
+
+    @property
+    def columns(self):
+        return self._columns
+
+    @property
+    def max_size(self):
+        return self._max_size
+
+    def add_row(self, column):
+        if len(column.contents) != len(self.columns):
+            raise RuntimeError("Attempt to add a row with differing"
+                               " column count")
+        # Will adding it push over our limit?
+        if len(self.body) >= self.max_size:
+            self.body.pop()
+        self.body.insert(0, column)
+
 ###
 
 
@@ -334,8 +359,7 @@ def main():
     gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
     gerrit_details = collections.defaultdict(int)
 
-    list_walker = urwid.SimpleListWalker([])
-    list_box = urwid.ListBox(list_walker)
+    review_table = SortableTable(COLUMNS, back_amount)
     table_header = []
     for col_name in COLUMNS:
         col_attrs = list(COLUMN_ATTRIBUTES[col_name])
@@ -351,11 +375,11 @@ def main():
                             'body')
     footer_sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
     footer_pile = urwid.Pile([footer_sep, footer])
-    frame = urwid.LineBox(urwid.Frame(urwid.AttrWrap(list_box, 'body'),
+    frame = urwid.LineBox(urwid.Frame(urwid.AttrWrap(review_table, 'body'),
                           footer=footer_pile, header=header_pile))
 
-    def exit_on_q(input):
-        if input in ('q', 'Q', 'esc'):
+    def on_unhandled_input(key):
+        if key in ('q', 'Q', 'esc'):
             raise urwid.ExitMainLoop()
 
     def on_patchset_created(event):
@@ -382,17 +406,14 @@ def main():
             col_attrs = list(COLUMN_ATTRIBUTES[col_name])
             col_attrs.append(_format_text(v))
             attr_row.append(tuple(col_attrs))
-        # The list is getting to big, shrink it.
-        if len(list_walker) >= back_amount:
-            list_walker.pop()
         match = urwid.Columns(attr_row, dividechars=1)
         set_status(match, 'Open')
-        list_walker.insert(0, match)
+        review_table.add_row(match)
 
     def find_change(change):
         m_c = None
         url_i = COLUMN_2_IDX['Url']
-        for c in list_walker:
+        for c in review_table.body:
             url = c.contents[url_i]
             if url[0].text == change.get('url'):
                 m_c = c
@@ -503,7 +524,7 @@ def main():
 
     loop = urwid.MainLoop(frame, PALETTE,
                           handle_mouse=False,
-                          unhandled_input=exit_on_q)
+                          unhandled_input=on_unhandled_input)
     gerrit_reader.start()
     loop.event_loop.enter_idle(functools.partial(on_idle, loop))
     loop.run()
