@@ -527,14 +527,10 @@ def main():
                 else:
                     footer_text.set_text("Connecting...")
             else:
-                ev_am = len(evs)
-                if ev_am == 0:
+                if len(evs) == 0:
                     footer_text.set_text("Waiting for events...")
                 else:
-                    if ev_am > 1:
-                        footer_text.set_text("Processed %s events..." % ev_am)
-                    else:
-                        footer_text.set_text("Processed %s event..." % ev_am)
+                    footer_text.set_text("Processing events...")
 
     def on_idle(loop):
         loop.set_alarm_in(ALARM_FREQ, process_gerrit)
