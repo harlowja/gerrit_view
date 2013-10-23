@@ -186,6 +186,9 @@ def main():
     parser.add_option("-u", "--user", dest="users", action='append',
                       help="gather information on given USER", metavar="USER",
                       default=[])
+    parser.add_option("-s", "--status", dest="statuses", action='append',
+                      help="gather information on given status", metavar="STATUS",
+                      default=[])
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
@@ -196,6 +199,9 @@ def main():
                       help="display field in results [default: %s]" % allfieldsstr,
                       metavar="FIELD", default=[])
     (options, args) = parser.parse_args()
+
+    if len(options.statuses) == 0:
+        options.statuses = ["open"]
 
     if len(options.fields) == 0:
         fields = allfields
@@ -243,7 +249,7 @@ def main():
     entries = get_info(options.login,
                        options.keyfile,
                        { "owner": list(options.users),
-                         "status": ["open"] })
+                         "status": options.statuses })
     entries = sort_results(entries, sort, reverse)
     print_results(entries, fields)
 
