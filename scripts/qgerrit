@@ -93,7 +93,7 @@ def run_query(login_name, query, key_file):
             if not isinstance(dec, (dict)):
                 raise TypeError("Expected decoded dict, not %s" % (type(dec)))
             # Skip the row count entry (which seems to come in last)
-            if 'rowCount' in dec or dec.get('type') == 'status':
+            if 'rowCount' in dec or dec.get('type') == 'stats':
                 continue
             results.append(dec)
         except (ValueError, TypeError):
