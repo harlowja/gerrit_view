@@ -92,11 +92,29 @@ def print_wrapped(text):
 
 def _get_date(k, row):
     v = _get_key(k, row)
-    if not v:
-        return ''
     try:
-        dt = datetime.fromtimestamp(int(v))
-        return dt.strftime('%I:%M %p %m/%d/%y')
+        now = datetime.now()
+        then = datetime.fromtimestamp(int(v))
+        delta = now - then
+        hours = delta.seconds / (60 * 60)
+        mins = delta.seconds / 60
+
+        if delta.days == 1:
+            return "%d day" % delta.days
+        elif delta.days > 1:
+            return "%d days" % delta.days
+        elif hours == 1:
+            return "%d hour" % hours
+        elif hours > 1:
+            return "%d hours" % hours
+        elif mins == 1:
+            return "%d min" % mins
+        elif mins > 1:
+            return "%d mins" % mins
+        else:
+            return "just now"
+        
+        return str(delta)
     except (TypeError, ValueError):
         return ''
 
