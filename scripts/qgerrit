@@ -65,11 +65,13 @@ def run_query(loginname, query, keyfile):
     cmd.append(query)
     (stdout, _stderr) = tiny_p(cmd)
     entries = stdout.splitlines()
+    results = []
     for e in entries:
         dec = json.loads(e)
         if 'rowCount' in dec:
             continue
-        yield dec
+        results.append(dec)
+    return results
 
 
 def _get_key(k, row, truncate=False):
@@ -98,63 +100,47 @@ def _get_date(k, row):
     except (TypeError, ValueError):
         return ''
 
-
 def print_results(results):
-    names = sorted(results.keys())
-    for k in names:
-        headers = ["Status", "Topic", "Url", "Project", 'Subject',
-                   'Created On', 'Last Updated']
-        table = prettytable.PrettyTable(headers)
-        table.padding_width = 1
-        res = results[k]
-        num_seen = set()
-        for d in sorted(res.keys()):
-            if len(res[d]) == 0:
-                continue
-            for r in res[d]:
-                try:
-                    num = int(r['number'])
-                except (ValueError, TypeError, KeyError):
-                    num = -1
-                if num < 0:
-                    continue
-                if num in num_seen:
-                    continue
-                num_seen.add(num)
-                row = [
-                    _get_key('status', r), _get_key('topic', r, truncate=True),
-                    _get_key('url', r), _get_key('project', r),
-                    _get_key('subject', r, truncate=True),
-                    _get_date('createdOn', r), _get_date('lastUpdated', r),
-                ]
-                non_empty = [r for r in row if r]
-                if len(non_empty) == 0:
-                    continue
-                table.add_row(row)
-        print_wrapped("Gerrit query for '%s' (%s total reviews)"
-                      % (k, len(num_seen)))
-        if len(num_seen):
-            print(table.get_string(sortby="Status"))
-
-
-def get_info(loginname, users_names, keyfile):
-    entries = {}
-    for n in sorted(list(users_names)):
-        if n in entries:
+    headers = ["Status", "Topic", "Url", "Project", 'Subject',
+               'Created On', 'Last Updated']
+    table = prettytable.PrettyTable(headers)
+    table.padding_width = 1
+    num_seen = set()
+    for res in results:
+        try:
+            num = int(res['number'])
+        except (ValueError, TypeError, KeyError):
+            num = -1
+        if num < 0:
             continue
-        if n not in entries:
-            entries[n] = {
-                'merged': [],
-                'open': [],
-                'abandoned': [],
-                'submitted': [],
-            }
-        types = entries[n].keys()
-        for t in types:
-            query = "status:%s AND owner:'%s'" % (t, n)
-            entries[n][t].extend(run_query(loginname, query, keyfile))
-    return entries
+        if num in num_seen:
+            continue
 
+        num_seen.add(num)
+
+        row = [
+            _get_key('status', res), _get_key('topic', res, truncate=True),
+            _get_key('url', res), _get_key('project', res),
+            _get_key('subject', res, truncate=True),
+            _get_date('createdOn', res), _get_date('lastUpdated', res),
+        ]
+        table.add_row(row)
+
+    if len(num_seen):
+        print(table.get_string(sortby="Status"))
+
+
+def get_info(loginname, keyfile, terms):
+    clauses = []
+    for term in terms:
+        if len(terms[term]) == 0:
+            continue
+
+        clause = " OR ".join(map(lambda value: "%s:%s" % (term, value), terms[term]))
+        if clause != "":
+            clauses.append(clause)
+    query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
+    return run_query(loginname, query, keyfile)
 
 def _get_key_path():
     home_dir = os.path.expanduser("~")
@@ -173,14 +159,16 @@ def main():
     parser.add_option("-l", "--login", dest="login", action='store',
                       help="connect to gerrit with USER", metavar="USER")
     parser.add_option("-u", "--user", dest="users", action='append',
-                      help="gather information on given USER", metavar="USER")
+                      help="gather information on given USER", metavar="USER",
+                      default=[])
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
     (options, args) = parser.parse_args()
-    if not options.users:
-        parser.error("Users required")
-    entries = get_info(options.login, list(options.users), options.keyfile)
+    entries = get_info(options.login,
+                       options.keyfile,
+                       { "owner": list(options.users),
+                         "status": ["open"] })
     print_results(entries)
 
 
