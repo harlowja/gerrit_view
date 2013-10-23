@@ -100,9 +100,19 @@ def _get_date(k, row):
     except (TypeError, ValueError):
         return ''
 
-def print_results(results):
-    headers = ["Status", "Topic", "Url", "Project", 'Subject',
-               'Created On', 'Last Updated']
+allfields = [
+    { 'key': "status", 'label': "Status", 'mapfunc': _get_key },
+    { 'key': "topic", 'label': "Topic", 'mapfunc': _get_key, "truncate": 20 },
+    { 'key': "url", 'label': "URL", 'mapfunc': _get_key },
+    { 'key': "project", 'label': "Project", 'mapfunc': _get_key },
+    { 'key': "subject", 'label': "Subject", 'mapfunc': _get_key, "truncate": 50 },
+    { 'key': "createdOn", 'label': "Created", 'mapfunc': _get_date },
+    { 'key': "lastUpdated",'label': "Updated", 'mapfunc': _get_date },
+]
+
+
+def print_results(results, fields):
+    headers = map(lambda field: field["label"], fields)
     table = prettytable.PrettyTable(headers)
     table.padding_width = 1
     num_seen = set()
@@ -118,12 +128,15 @@ def print_results(results):
 
         num_seen.add(num)
 
-        row = [
-            _get_key('status', res), _get_key('topic', res, truncate=True),
-            _get_key('url', res), _get_key('project', res),
-            _get_key('subject', res, truncate=True),
-            _get_date('createdOn', res), _get_date('lastUpdated', res),
-        ]
+        row = []
+        for field in fields:
+            func = field["mapfunc"]
+            val = func(field["key"], res)
+            if "truncate" in field:
+                maxlen = field["truncate"]
+                if len(val) > maxlen:
+                    val = val[0:maxlen] + "..."
+            row.append(val)
         table.add_row(row)
 
     if len(num_seen):
@@ -169,7 +182,7 @@ def main():
                        options.keyfile,
                        { "owner": list(options.users),
                          "status": ["open"] })
-    print_results(entries)
+    print_results(entries, allfields)
 
 
 if __name__ == '__main__':
