@@ -52,11 +52,14 @@ def tiny_p(cmd, capture=True):
     return (out, err)
 
 
-def run_query(names, query, keyfile):
+def run_query(loginname, query, keyfile):
     cmd = ['ssh']
     if keyfile and os.path.isfile(keyfile):
         cmd.extend(['-i', str(keyfile)])
-    BASE_CMD_OPTS = (names[0]+'@'+GERRIT_HOST, '-p', str(GERRIT_PORT))
+    if loginname is not None:
+        BASE_CMD_OPTS = (loginname+'@'+GERRIT_HOST, '-p', str(GERRIT_PORT))
+    else:
+        BASE_CMD_OPTS = (GERRIT_HOST, '-p', str(GERRIT_PORT))
     cmd.extend(BASE_CMD_OPTS)
     cmd.extend(GERRIT_CMD)
     cmd.append(query)
@@ -134,7 +137,7 @@ def print_results(results):
             print(table.get_string(sortby="Status"))
 
 
-def get_info(users_names, keyfile):
+def get_info(loginname, users_names, keyfile):
     entries = {}
     for n in sorted(list(users_names)):
         if n in entries:
@@ -149,7 +152,7 @@ def get_info(users_names, keyfile):
         types = entries[n].keys()
         for t in types:
             query = "status:%s AND owner:'%s'" % (t, n)
-            entries[n][t].extend(run_query(users_names, query, keyfile))
+            entries[n][t].extend(run_query(loginname, query, keyfile))
     return entries
 
 
@@ -167,6 +170,8 @@ def _get_key_path():
 
 def main():
     parser = optparse.OptionParser()
+    parser.add_option("-l", "--login", dest="login", action='store',
+                      help="connect to gerrit with USER", metavar="USER")
     parser.add_option("-u", "--user", dest="users", action='append',
                       help="gather information on given USER", metavar="USER")
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
@@ -175,7 +180,7 @@ def main():
     (options, args) = parser.parse_args()
     if not options.users:
         parser.error("Users required")
-    entries = get_info(list(options.users), options.keyfile)
+    entries = get_info(options.login, list(options.users), options.keyfile)
     print_results(entries)
 
 
