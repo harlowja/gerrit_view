@@ -189,6 +189,9 @@ def main():
     parser.add_option("-s", "--status", dest="statuses", action='append',
                       help="gather information on given status", metavar="STATUS",
                       default=[])
+    parser.add_option("-m", "--message", dest="messages", action='append',
+                      help="filter on message", metavar="MESSAGE",
+                      default=[])
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
@@ -249,7 +252,8 @@ def main():
     entries = get_info(options.login,
                        options.keyfile,
                        { "owner": list(options.users),
-                         "status": options.statuses })
+                         "status": options.statuses,
+                         'message': options.messages })
     entries = sort_results(entries, sort, reverse)
     print_results(entries, fields)
 
