@@ -13,10 +13,25 @@ Use `qgerrit` to find out what your friends have been up to::
     
     Options:
       -h, --help            show this help message and exit
+      -l USER, --login=USER
+                            connect to gerrit with USER
       -u USER, --user=USER  gather information on given USER
+      -s STATUS, --status=STATUS
+                            gather information on given status
+      -m MESSAGE, --message=MESSAGE
+                            filter on message
+      -p PROJECT, --project=PROJECT
+                            gather information on given project
+      -a APPROVAL, --approval=APPROVAL
+                            filter on approval value min %n [default: no filter]
       -k FILE, --keyfile=FILE
                             gerrit ssh keyfile [default:
                             /homes/harlowja/.ssh/id_rsa]
+      -t SORT, --sort=SORT  sort order for results [default: createdOn]
+      -f FIELD, --field=FIELD
+                            display field in results [default: 'approvals',
+                            'createdOn', 'lastUpdated', 'owner', 'project',
+                            'status', 'subject', 'topic', 'url']
 
 cgerrit
 ------------
