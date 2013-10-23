@@ -22,6 +22,7 @@ import json
 import optparse
 import os
 import subprocess
+import sys
 
 from datetime import datetime
 
@@ -30,7 +31,6 @@ import prettytable
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
 GERRIT_CMD = ('gerrit', 'query', '--format=JSON')
-TRUNCATE_LEN = 27
 
 
 def tiny_p(cmd, capture=True):
@@ -74,13 +74,12 @@ def run_query(loginname, query, keyfile):
     return results
 
 
-def _get_key(k, row, truncate=False):
+def _get_key(k, row):
     if k not in row:
         return ""
     v = str(row[k])
-    if truncate:
-        if len(v) > TRUNCATE_LEN:
-            v = v[0:TRUNCATE_LEN] + "..."
+    if v is None:
+        return ""
     return v
 
 
@@ -140,7 +139,7 @@ def print_results(results, fields):
         table.add_row(row)
 
     if len(num_seen):
-        print(table.get_string(sortby="Status"))
+        print(table.get_string())
 
 
 def get_info(loginname, keyfile, terms):
@@ -166,8 +165,20 @@ def _get_key_path():
             return path
     return None
 
+def valid_field(name, fields):
+    for field in fields:
+        if field["key"] == name:
+            return True
+    return False
+
+def sort_results(results, key, reverse):
+    return sorted(results, key=lambda result: result[key], reverse=reverse)
+
 
 def main():
+    allfieldslist = map(lambda field: field["key"], allfields)
+    allfieldsstr = ", ".join(map(lambda field: field["key"], allfields))
+
     parser = optparse.OptionParser()
     parser.add_option("-l", "--login", dest="login", action='store',
                       help="connect to gerrit with USER", metavar="USER")
@@ -177,12 +188,63 @@ def main():
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
+    parser.add_option("-t", "--sort", dest="sort", action='store',
+                      help="sort order for results [default: createdOn]",
+                      metavar="SORT", default="createdOn")
+    parser.add_option("-f", "--field", dest="fields", action='append',
+                      help="display field in results [default: %s]" % allfieldsstr,
+                      metavar="FIELD", default=[])
     (options, args) = parser.parse_args()
+
+    if len(options.fields) == 0:
+        fields = allfields
+    else:
+        trunc = {}
+        fieldnames = []
+        for name in options.fields:
+            offset = name.find(":")
+            if offset != -1:
+                val = int(name[offset + 1:])
+                name = name[0:offset]
+                trunc[name] = val
+            fieldnames.append(name)
+
+        if not valid_field(name, allfields):
+            print >>sys.stderr, "Invalid valid name '%s', valid otions: %s" % (name, allfieldsstr)
+            sys.exit(1)
+
+        fields = []
+        for field in allfields:
+            if field["key"] not in fieldnames:
+                continue
+            if field["key"] in trunc:
+                field["truncate"] = trunc[field["key"]]
+            fields.append(field)
+
+    sort = "createdOn"
+    reverse = False
+    if options.sort is not None:
+        offset = options.sort.find(":")
+        if offset != -1:
+            direction = options.sort[offset + 1:]
+            if direction == "rev":
+                reverse = True
+            name = options.sort[0:offset]
+        else:
+            name = options.sort
+
+        if not valid_field(name, fields):
+            print >>sys.stderr, "Invalid sort key '%s', valid otions: %s" % (name, allfieldsstr)
+            sys.exit(1)
+        sort = name
+
+
     entries = get_info(options.login,
                        options.keyfile,
                        { "owner": list(options.users),
                          "status": ["open"] })
-    print_results(entries, allfields)
+    entries = sort_results(entries, sort, reverse)
+    print_results(entries, fields)
 
 
 if __name__ == '__main__':
