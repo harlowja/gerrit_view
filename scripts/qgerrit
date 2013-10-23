@@ -19,22 +19,37 @@
 #    under the License.
 
 import json
+import logging
 import optparse
 import os
+import re
 import subprocess
 import sys
-import re
 
 from datetime import datetime
 
 import prettytable
+import six
+
+logging.basicConfig(level=logging.ERROR,
+                    format='%(asctime)s %(levelname)s: %(message)s',
+                    stream=sys.stderr)
+LOG = logging.getLogger(__name__)
+
+### DEFAULT SETTINGS/CONSTANTS
 
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
-GERRIT_CMD = ('gerrit', 'query', '--format=JSON', "--current-patch-set", "--files")
+DEFAULT_SORT = 'createdOn'
+GERRIT_CMD = ('gerrit', 'query',
+              '--format=JSON',
+              "--current-patch-set",
+              "--files")
+
+###
 
 
-def tiny_p(cmd, capture=True):
+def tiny_p(cmd, capture=True, ok_rcs=(0,)):
     # Borrowed from cloud-init...
     #
     # Darn python 2.6 doesn't have check_output (argggg)
@@ -43,55 +58,69 @@ def tiny_p(cmd, capture=True):
     if not capture:
         stdout = None
         stderr = None
+    LOG.debug("Running cmd %s", cmd)
     sp = subprocess.Popen(cmd, stdout=stdout,
                           stderr=stderr, stdin=None)
     (out, err) = sp.communicate()
     ret = sp.returncode  # pylint: disable=E1101
-    if ret not in [0]:
+    if ret not in ok_rcs:
         raise RuntimeError("Failed running %s [rc=%s] (%s, %s)"
                            % (cmd, ret, out, err))
     return (out, err)
 
 
-def run_query(loginname, query, keyfile):
-    cmd = ['ssh']
-    if keyfile and os.path.isfile(keyfile):
-        cmd.extend(['-i', str(keyfile)])
-    if loginname is not None:
-        BASE_CMD_OPTS = (loginname+'@'+GERRIT_HOST, '-p', str(GERRIT_PORT))
+def server_cmd(login_name, port=GERRIT_PORT, host=GERRIT_HOST):
+    pieces = []
+    if login_name:
+        pieces.extend(['%s@%s' % (login_name, host), '-p', port])
     else:
-        BASE_CMD_OPTS = (GERRIT_HOST, '-p', str(GERRIT_PORT))
-    cmd.extend(BASE_CMD_OPTS)
+        pieces.extend([host, '-p', port])
+    return [str(p) for p in pieces]
+
+
+def run_query(login_name, query, key_file):
+    cmd = ['ssh']
+    if key_file and os.path.isfile(key_file):
+        cmd.extend(['-i', str(key_file)])
+    cmd.extend(server_cmd(login_name))
     cmd.extend(GERRIT_CMD)
     cmd.append(query)
     (stdout, _stderr) = tiny_p(cmd)
-    entries = stdout.splitlines()
     results = []
-    for e in entries:
-        dec = json.loads(e)
-        if 'rowCount' in dec:
-            continue
-        results.append(dec)
+    for e in stdout.splitlines():
+        try:
+            dec = json.loads(e)
+            if not isinstance(dec, (dict)):
+                raise TypeError("Expected decoded dict, not %s" % (type(dec)))
+            # Skip the row count entry (which seems to come in last)
+            if 'rowCount' in dec or dec.get('type') == 'status':
+                continue
+            results.append(dec)
+        except (ValueError, TypeError):
+            LOG.exception("Failure decoding received entry")
     return results
 
 
-def _get_key(k, row):
+def uniq_itr(itr):
+    seen = set()
+    for i in itr:
+        if i in seen:
+            continue
+        seen.add(i)
+        yield i
+
+
+def get_key(k, row):
     if k not in row:
         return ""
-    v = str(row[k])
+    v = row.get(k)
     if v is None:
         return ""
-    return v
+    return str(v)
 
 
-def print_wrapped(text):
-    print("-" * (len(text)))
-    print(text)
-    print("-" * (len(text)))
-
-
-def _get_date(k, row):
-    v = _get_key(k, row)
+def get_date(k, row):
+    v = get_key(k, row)
     try:
         now = datetime.now()
         then = datetime.fromtimestamp(int(v))
@@ -113,54 +142,46 @@ def _get_date(k, row):
             return "%d mins" % mins
         else:
             return "just now"
-        
+
         return str(delta)
     except (TypeError, ValueError):
         return ''
 
-def _get_approvals(k, row):
-    approvals = row["currentPatchSet"].get("approvals", [])
+
+def get_approvals(k, row):
+    try:
+        approvals = row["currentPatchSet"]["approvals"]
+    except (KeyError, TypeError):
+        approvals = []
     vals = {}
     for approval in approvals:
-        gottype = approval["type"][0:1].lower()
-        if gottype not in vals:
-            vals[gottype] = []
-        vals[gottype].append(approval["value"])
-
+        got_type = approval["type"][0:1].lower()
+        if got_type not in vals:
+            vals[got_type] = []
+        vals[got_type].append(approval["value"])
     keys = vals.keys()
     keys.sort(reverse=True)
-    return " ".join(map(lambda val: "%s=%s" % (val, ",".join(vals[val])), keys))
-
-allfields = [
-    { 'key': "status", 'label': "Status", 'mapfunc': _get_key },
-    { 'key': "topic", 'label': "Topic", 'mapfunc': _get_key, "truncate": 20 },
-    { 'key': "url", 'label': "URL", 'mapfunc': _get_key },
-    { 'key': "project", 'label': "Project", 'mapfunc': _get_key },
-    { 'key': "subject", 'label': "Subject", 'mapfunc': _get_key, "truncate": 50 },
-    { 'key': "createdOn", 'label': "Created", 'mapfunc': _get_date },
-    { 'key': "lastUpdated",'label': "Updated", 'mapfunc': _get_date },
-    { 'key': "approvals", 'label': "Approvals", 'mapfunc': _get_approvals },
-]
+    return " ".join(map(lambda val: "%s=%s" % (val,
+                                               ",".join(vals[val])), keys))
 
 
 def print_results(results, fields):
-    headers = map(lambda field: field["label"], fields)
-    table = prettytable.PrettyTable(headers)
+    table = prettytable.PrettyTable(map(lambda field: field["label"], fields))
     table.padding_width = 1
-    table.align = "l"
+    table.align = "l"  # left alignment
+
+    # NOTE(harlowja): this keeps track of the review numbers seen, to avoid
+    # duplicates (which shouldn't happen but may).
     num_seen = set()
     for res in results:
         try:
             num = int(res['number'])
         except (ValueError, TypeError, KeyError):
             num = -1
-        if num < 0:
-            continue
-        if num in num_seen:
+        if num < 0 or num in num_seen:
             continue
 
         num_seen.add(num)
-
         row = []
         for field in fields:
             func = field["mapfunc"]
@@ -175,13 +196,22 @@ def print_results(results, fields):
     if len(num_seen):
         print(table.get_string())
 
+
 def matches_file(result, files):
-    for filere in files:
-        for fileentry in result["currentPatchSet"]["files"]:
-            filename = fileentry["file"]
-            if re.search(filere, filename):
+    names = []
+    try:
+        for file_entry in result["currentPatchSet"]["files"]:
+            names.append(file_entry.get("file"))
+    except (KeyError, TypeError):
+        pass
+    for file_re in files:
+        for name in names:
+            if not isinstance(name, six.string_types):
+                continue
+            if re.search(file_re, name):
                 return True
     return False
+
 
 #
 # approval == vN - verification passed value N
@@ -190,17 +220,22 @@ def matches_file(result, files):
 def matches_approval(result, approval):
     rules = approval.split(",")
     requires = {}
-
     for rule in rules:
         requires[rule[0:1]] = int(rule[1:])
 
+    try:
+        approvals = result["currentPatchSet"]["approvals"]
+    except (KeyError, TypeError):
+        approvals = []
+
     got = {}
-    for approval in result["currentPatchSet"].get("approvals", []):
-        gottype = approval["type"][0:1].lower()
-        gotval = int(approval["value"])
+    for approval in approvals:
+        got_type = approval["type"][0:1].lower()
+        got_val = int(approval["value"])
+
         # Record lowest flag value
-        if gottype not in got or got[gottype] > gotval:
-            got[gottype] = gotval
+        if got_type not in got or got[got_type] > got_val:
+            got[got_type] = got_val
 
     for rule in requires.keys():
         if rule not in got:
@@ -209,15 +244,15 @@ def matches_approval(result, approval):
             return False
 
     return True
-        
+
 
 def get_info(loginname, keyfile, terms, approval, files):
     clauses = []
     for term in terms:
         if len(terms[term]) == 0:
             continue
-
-        clause = " OR ".join(map(lambda value: "%s:%s" % (term, value), terms[term]))
+        clause = " OR ".join(map(lambda value: "%s:%s" % (term, value),
+                             terms[term]))
         if clause != "":
             clauses.append(clause)
     query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
@@ -225,11 +260,12 @@ def get_info(loginname, keyfile, terms, approval, files):
     if files is not None and len(files) > 0:
         results = filter(lambda result: matches_file(result, files), results)
     if approval is not None:
-        results = filter(lambda result: matches_approval(result, approval), results)
+        results = filter(lambda result: matches_approval(result, approval),
+                         results)
     return results
 
 
-def _get_key_path():
+def get_key_path():
     home_dir = os.path.expanduser("~")
     ssh_dir = os.path.join(home_dir, ".ssh")
     if not os.path.isdir(ssh_dir):
@@ -240,104 +276,153 @@ def _get_key_path():
             return path
     return None
 
+
 def valid_field(name, fields):
     for field in fields:
         if field["key"] == name:
             return True
     return False
 
+
+def format_fields(fields):
+    fields = ["'%s'" % (f) for f in sorted(fields)]
+    return ", ".join(fields)
+
+
+def get_owner(k, row):
+    owner = None
+    try:
+        owner = row.get(k).get('username')
+    except (TypeError, KeyError):
+        pass
+    if not owner:
+        return ''
+    return str(owner)
+
+
 def sort_results(results, key, reverse):
     return sorted(results, key=lambda result: result[key], reverse=reverse)
 
 
-def main():
-    allfieldslist = map(lambda field: field["key"], allfields)
-    allfieldsstr = ", ".join(map(lambda field: field["key"], allfields))
+# Late creation of this to make sure we can capture the needed functions.
+ALL_FIELDS = [
+    {'key': "status", 'label': "Status", 'mapfunc': get_key},
+    {'key': "topic", 'label': "Topic", 'mapfunc': get_key, "truncate": 20},
+    {'key': "url", 'label': "URL", 'mapfunc': get_key},
+    {'key': "owner", 'label': "Owner", 'mapfunc': get_owner},
+    {'key': "project", 'label': "Project", 'mapfunc': get_key},
+    {'key': "subject", 'label': "Subject", 'mapfunc': get_key, "truncate": 50},
+    {'key': "createdOn", 'label': "Created", 'mapfunc': get_date},
+    {'key': "lastUpdated", 'label': "Updated", 'mapfunc': get_date},
+    {'key': "approvals", 'label': "Approvals", 'mapfunc': get_approvals},
+]
+ALL_FIELD_NAMES = sorted([f['key'] for f in ALL_FIELDS])
 
-    parser = optparse.OptionParser()
+# See: https://git.eclipse.org/r/Documentation/user-search.html#status
+ALL_STATUS = sorted([
+    'abandoned',
+    'submitted',
+    'reviewed',
+    'closed',
+    'open',
+    'merged',
+])
+
+
+def main():
+    help_formatter = optparse.IndentedHelpFormatter(width=79)
+    parser = optparse.OptionParser(formatter=help_formatter)
     parser.add_option("-l", "--login", dest="login", action='store',
                       help="connect to gerrit with USER", metavar="USER")
     parser.add_option("-u", "--user", dest="users", action='append',
                       help="gather information on given USER", metavar="USER",
                       default=[])
     parser.add_option("-s", "--status", dest="statuses", action='append',
-                      help="gather information on given status", metavar="STATUS",
-                      default=[])
+                      help="gather information on given status",
+                      metavar="STATUS", default=[])
     parser.add_option("-m", "--message", dest="messages", action='append',
                       help="filter on message", metavar="MESSAGE",
                       default=[])
     parser.add_option("-p", "--project", dest="projects", action='append',
-                      help="gather information on given project", metavar="PROJECT",
+                      help="gather information on given project",
+                      metavar="PROJECT",
                       default=[])
     parser.add_option("-a", "--approval", dest="approval", action="store",
-                      help="filter on approval value min %n [default: no filter]",
+                      help="filter on approval value min %n"
+                           " [default: no filter]",
                       metavar="APPROVAL", default=None)
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
-                      metavar="FILE", default=_get_key_path())
+                      metavar="FILE", default=get_key_path())
     parser.add_option("-t", "--sort", dest="sort", action='store',
-                      help="sort order for results [default: createdOn]",
-                      metavar="SORT", default="createdOn")
+                      help="sort order for results [default: %default]",
+                      metavar="SORT", default=DEFAULT_SORT)
     parser.add_option("-f", "--field", dest="fields", action='append',
-                      help="display field in results [default: %s]" % allfieldsstr,
+                      help="display field in results"
+                           " [default: %s]" % format_fields(ALL_FIELD_NAMES),
                       metavar="FIELD", default=[])
     (options, args) = parser.parse_args()
 
     if len(options.statuses) == 0:
         options.statuses = ["open"]
 
+    for s in options.statuses:
+        if s not in ALL_STATUS:
+            parser.error("Invalid status '%s', valid options: %s"
+                         % (s, format_fields(ALL_STATUS)))
+
     if len(options.fields) == 0:
-        fields = allfields
+        fields = ALL_FIELDS
     else:
         trunc = {}
-        fieldnames = []
+        field_names = []
         for name in options.fields:
             offset = name.find(":")
             if offset != -1:
                 val = int(name[offset + 1:])
                 name = name[0:offset]
                 trunc[name] = val
-            fieldnames.append(name)
+            field_names.append(name)
 
-        if not valid_field(name, allfields):
-            print >>sys.stderr, "Invalid valid name '%s', valid otions: %s" % (name, allfieldsstr)
-            sys.exit(1)
+        for n in field_names:
+            if not valid_field(n, ALL_FIELDS):
+                parser.error("Invalid valid name '%s', valid options: %s"
+                             % (n, format_fields(ALL_FIELD_NAMES)))
 
         fields = []
-        for field in allfields:
-            if field["key"] not in fieldnames:
+        for field in ALL_FIELDS:
+            if field["key"] not in field_names:
                 continue
             if field["key"] in trunc:
                 field["truncate"] = trunc[field["key"]]
             fields.append(field)
 
-    sort = "createdOn"
+    sort_by = DEFAULT_SORT
     reverse = False
-    if options.sort is not None:
-        offset = options.sort.find(":")
-        if offset != -1:
-            direction = options.sort[offset + 1:]
-            if direction == "rev":
-                reverse = True
-            name = options.sort[0:offset]
-        else:
-            name = options.sort
-
-        if not valid_field(name, fields):
-            print >>sys.stderr, "Invalid sort key '%s', valid otions: %s" % (name, allfieldsstr)
-            sys.exit(1)
-        sort = name
-
+    offset = options.sort.find(":")
+    if offset != -1:
+        direction = options.sort[offset + 1:]
+        if direction == "rev":
+            reverse = True
+        name = options.sort[0:offset]
+    else:
+        name = options.sort
+    if not valid_field(name, fields):
+        parser.error("Invalid sort key '%s', valid options: %s"
+                     % (name, format_fields([f['key'] for f in fields])))
+    sort_by = name
 
     entries = get_info(options.login,
                        options.keyfile,
-                       { "owner": list(options.users),
-                         "status": options.statuses,
-                         'message': options.messages,
-                         'project': options.projects },
+                       {
+                           "owner": list(uniq_itr(options.users)),
+                           "status": list(uniq_itr(options.statuses)),
+                           'message': list(uniq_itr(options.messages)),
+                           'project': list(uniq_itr(options.projects)),
+                       },
                        options.approval,
                        args)
-    entries = sort_results(entries, sort, reverse)
+    entries = sort_results(entries, sort_by, reverse)
     print_results(entries, fields)
 
 
