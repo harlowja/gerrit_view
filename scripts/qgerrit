@@ -114,6 +114,7 @@ def print_results(results, fields):
     headers = map(lambda field: field["label"], fields)
     table = prettytable.PrettyTable(headers)
     table.padding_width = 1
+    table.align = "l"
     num_seen = set()
     for res in results:
         try:
