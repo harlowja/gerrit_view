@@ -22,6 +22,8 @@ import json
 import optparse
 import os
 import subprocess
+import sys
+import re
 
 from datetime import datetime
 
@@ -29,8 +31,7 @@ import prettytable
 
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
-GERRIT_CMD = ('gerrit', 'query', '--format=JSON')
-TRUNCATE_LEN = 27
+GERRIT_CMD = ('gerrit', 'query', '--format=JSON', "--current-patch-set", "--files")
 
 
 def tiny_p(cmd, capture=True):
@@ -52,30 +53,34 @@ def tiny_p(cmd, capture=True):
     return (out, err)
 
 
-def run_query(names, query, keyfile):
+def run_query(loginname, query, keyfile):
     cmd = ['ssh']
     if keyfile and os.path.isfile(keyfile):
         cmd.extend(['-i', str(keyfile)])
-    BASE_CMD_OPTS = (names[0]+'@'+GERRIT_HOST, '-p', str(GERRIT_PORT))
+    if loginname is not None:
+        BASE_CMD_OPTS = (loginname+'@'+GERRIT_HOST, '-p', str(GERRIT_PORT))
+    else:
+        BASE_CMD_OPTS = (GERRIT_HOST, '-p', str(GERRIT_PORT))
     cmd.extend(BASE_CMD_OPTS)
     cmd.extend(GERRIT_CMD)
     cmd.append(query)
     (stdout, _stderr) = tiny_p(cmd)
     entries = stdout.splitlines()
+    results = []
     for e in entries:
         dec = json.loads(e)
         if 'rowCount' in dec:
             continue
-        yield dec
+        results.append(dec)
+    return results
 
 
-def _get_key(k, row, truncate=False):
+def _get_key(k, row):
     if k not in row:
         return ""
     v = str(row[k])
-    if truncate:
-        if len(v) > TRUNCATE_LEN:
-            v = v[0:TRUNCATE_LEN] + "..."
+    if v is None:
+        return ""
     return v
 
 
@@ -87,70 +92,141 @@ def print_wrapped(text):
 
 def _get_date(k, row):
     v = _get_key(k, row)
-    if not v:
-        return ''
     try:
-        dt = datetime.fromtimestamp(int(v))
-        return dt.strftime('%I:%M %p %m/%d/%y')
+        now = datetime.now()
+        then = datetime.fromtimestamp(int(v))
+        delta = now - then
+        hours = delta.seconds / (60 * 60)
+        mins = delta.seconds / 60
+
+        if delta.days == 1:
+            return "%d day" % delta.days
+        elif delta.days > 1:
+            return "%d days" % delta.days
+        elif hours == 1:
+            return "%d hour" % hours
+        elif hours > 1:
+            return "%d hours" % hours
+        elif mins == 1:
+            return "%d min" % mins
+        elif mins > 1:
+            return "%d mins" % mins
+        else:
+            return "just now"
+        
+        return str(delta)
     except (TypeError, ValueError):
         return ''
 
+def _get_approvals(k, row):
+    approvals = row["currentPatchSet"].get("approvals", [])
+    vals = {}
+    for approval in approvals:
+        gottype = approval["type"][0:1].lower()
+        if gottype not in vals:
+            vals[gottype] = []
+        vals[gottype].append(approval["value"])
 
-def print_results(results):
-    names = sorted(results.keys())
-    for k in names:
-        headers = ["Status", "Topic", "Url", "Project", 'Subject',
-                   'Created On', 'Last Updated']
-        table = prettytable.PrettyTable(headers)
-        table.padding_width = 1
-        res = results[k]
-        num_seen = set()
-        for d in sorted(res.keys()):
-            if len(res[d]) == 0:
-                continue
-            for r in res[d]:
-                try:
-                    num = int(r['number'])
-                except (ValueError, TypeError, KeyError):
-                    num = -1
-                if num < 0:
-                    continue
-                if num in num_seen:
-                    continue
-                num_seen.add(num)
-                row = [
-                    _get_key('status', r), _get_key('topic', r, truncate=True),
-                    _get_key('url', r), _get_key('project', r),
-                    _get_key('subject', r, truncate=True),
-                    _get_date('createdOn', r), _get_date('lastUpdated', r),
-                ]
-                non_empty = [r for r in row if r]
-                if len(non_empty) == 0:
-                    continue
-                table.add_row(row)
-        print_wrapped("Gerrit query for '%s' (%s total reviews)"
-                      % (k, len(num_seen)))
-        if len(num_seen):
-            print(table.get_string(sortby="Status"))
+    keys = vals.keys()
+    keys.sort(reverse=True)
+    return " ".join(map(lambda val: "%s=%s" % (val, ",".join(vals[val])), keys))
+
+allfields = [
+    { 'key': "status", 'label': "Status", 'mapfunc': _get_key },
+    { 'key': "topic", 'label': "Topic", 'mapfunc': _get_key, "truncate": 20 },
+    { 'key': "url", 'label': "URL", 'mapfunc': _get_key },
+    { 'key': "project", 'label': "Project", 'mapfunc': _get_key },
+    { 'key': "subject", 'label': "Subject", 'mapfunc': _get_key, "truncate": 50 },
+    { 'key': "createdOn", 'label': "Created", 'mapfunc': _get_date },
+    { 'key': "lastUpdated",'label': "Updated", 'mapfunc': _get_date },
+    { 'key': "approvals", 'label': "Approvals", 'mapfunc': _get_approvals },
+]
 
 
-def get_info(users_names, keyfile):
-    entries = {}
-    for n in sorted(list(users_names)):
-        if n in entries:
+def print_results(results, fields):
+    headers = map(lambda field: field["label"], fields)
+    table = prettytable.PrettyTable(headers)
+    table.padding_width = 1
+    table.align = "l"
+    num_seen = set()
+    for res in results:
+        try:
+            num = int(res['number'])
+        except (ValueError, TypeError, KeyError):
+            num = -1
+        if num < 0:
             continue
-        if n not in entries:
-            entries[n] = {
-                'merged': [],
-                'open': [],
-                'abandoned': [],
-                'submitted': [],
-            }
-        types = entries[n].keys()
-        for t in types:
-            query = "status:%s AND owner:'%s'" % (t, n)
-            entries[n][t].extend(run_query(users_names, query, keyfile))
-    return entries
+        if num in num_seen:
+            continue
+
+        num_seen.add(num)
+
+        row = []
+        for field in fields:
+            func = field["mapfunc"]
+            val = func(field["key"], res)
+            if "truncate" in field:
+                maxlen = field["truncate"]
+                if len(val) > maxlen:
+                    val = val[0:maxlen] + "..."
+            row.append(val)
+        table.add_row(row)
+
+    if len(num_seen):
+        print(table.get_string())
+
+def matches_file(result, files):
+    for filere in files:
+        for fileentry in result["currentPatchSet"]["files"]:
+            filename = fileentry["file"]
+            if re.search(filere, filename):
+                return True
+    return False
+
+#
+# approval == vN - verification passed value N
+# approval == cN - code review passed value N
+#
+def matches_approval(result, approval):
+    rules = approval.split(",")
+    requires = {}
+
+    for rule in rules:
+        requires[rule[0:1]] = int(rule[1:])
+
+    got = {}
+    for approval in result["currentPatchSet"].get("approvals", []):
+        gottype = approval["type"][0:1].lower()
+        gotval = int(approval["value"])
+        # Record lowest flag value
+        if gottype not in got or got[gottype] > gotval:
+            got[gottype] = gotval
+
+    for rule in requires.keys():
+        if rule not in got:
+            return False
+        if got[rule] < requires[rule]:
+            return False
+
+    return True
+        
+
+def get_info(loginname, keyfile, terms, approval, files):
+    clauses = []
+    for term in terms:
+        if len(terms[term]) == 0:
+            continue
+
+        clause = " OR ".join(map(lambda value: "%s:%s" % (term, value), terms[term]))
+        if clause != "":
+            clauses.append(clause)
+    query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
+    results = run_query(loginname, query, keyfile)
+    if files is not None and len(files) > 0:
+        results = filter(lambda result: matches_file(result, files), results)
+    if approval is not None:
+        results = filter(lambda result: matches_approval(result, approval), results)
+    return results
 
 
 def _get_key_path():
@@ -164,19 +240,105 @@ def _get_key_path():
             return path
     return None
 
+def valid_field(name, fields):
+    for field in fields:
+        if field["key"] == name:
+            return True
+    return False
+
+def sort_results(results, key, reverse):
+    return sorted(results, key=lambda result: result[key], reverse=reverse)
+
 
 def main():
+    allfieldslist = map(lambda field: field["key"], allfields)
+    allfieldsstr = ", ".join(map(lambda field: field["key"], allfields))
+
     parser = optparse.OptionParser()
+    parser.add_option("-l", "--login", dest="login", action='store',
+                      help="connect to gerrit with USER", metavar="USER")
     parser.add_option("-u", "--user", dest="users", action='append',
-                      help="gather information on given USER", metavar="USER")
+                      help="gather information on given USER", metavar="USER",
+                      default=[])
+    parser.add_option("-s", "--status", dest="statuses", action='append',
+                      help="gather information on given status", metavar="STATUS",
+                      default=[])
+    parser.add_option("-m", "--message", dest="messages", action='append',
+                      help="filter on message", metavar="MESSAGE",
+                      default=[])
+    parser.add_option("-p", "--project", dest="projects", action='append',
+                      help="gather information on given project", metavar="PROJECT",
+                      default=[])
+    parser.add_option("-a", "--approval", dest="approval", action="store",
+                      help="filter on approval value min %n [default: no filter]",
+                      metavar="APPROVAL", default=None)
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
+    parser.add_option("-t", "--sort", dest="sort", action='store',
+                      help="sort order for results [default: createdOn]",
+                      metavar="SORT", default="createdOn")
+    parser.add_option("-f", "--field", dest="fields", action='append',
+                      help="display field in results [default: %s]" % allfieldsstr,
+                      metavar="FIELD", default=[])
     (options, args) = parser.parse_args()
-    if not options.users:
-        parser.error("Users required")
-    entries = get_info(list(options.users), options.keyfile)
-    print_results(entries)
+
+    if len(options.statuses) == 0:
+        options.statuses = ["open"]
+
+    if len(options.fields) == 0:
+        fields = allfields
+    else:
+        trunc = {}
+        fieldnames = []
+        for name in options.fields:
+            offset = name.find(":")
+            if offset != -1:
+                val = int(name[offset + 1:])
+                name = name[0:offset]
+                trunc[name] = val
+            fieldnames.append(name)
+
+        if not valid_field(name, allfields):
+            print >>sys.stderr, "Invalid valid name '%s', valid otions: %s" % (name, allfieldsstr)
+            sys.exit(1)
+
+        fields = []
+        for field in allfields:
+            if field["key"] not in fieldnames:
+                continue
+            if field["key"] in trunc:
+                field["truncate"] = trunc[field["key"]]
+            fields.append(field)
+
+    sort = "createdOn"
+    reverse = False
+    if options.sort is not None:
+        offset = options.sort.find(":")
+        if offset != -1:
+            direction = options.sort[offset + 1:]
+            if direction == "rev":
+                reverse = True
+            name = options.sort[0:offset]
+        else:
+            name = options.sort
+
+        if not valid_field(name, fields):
+            print >>sys.stderr, "Invalid sort key '%s', valid otions: %s" % (name, allfieldsstr)
+            sys.exit(1)
+        sort = name
+
+
+    entries = get_info(options.login,
+                       options.keyfile,
+                       { "owner": list(options.users),
+                         "status": options.statuses,
+                         'message': options.messages,
+                         'project': options.projects },
+                       options.approval,
+                       args)
+    entries = sort_results(entries, sort, reverse)
+    print_results(entries, fields)
 
 
 if __name__ == '__main__':
