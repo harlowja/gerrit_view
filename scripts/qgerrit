@@ -192,6 +192,9 @@ def main():
     parser.add_option("-m", "--message", dest="messages", action='append',
                       help="filter on message", metavar="MESSAGE",
                       default=[])
+    parser.add_option("-p", "--project", dest="projects", action='append',
+                      help="gather information on given project", metavar="PROJECT",
+                      default=[])
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
@@ -253,7 +256,8 @@ def main():
                        options.keyfile,
                        { "owner": list(options.users),
                          "status": options.statuses,
-                         'message': options.messages })
+                         'message': options.messages,
+                         'project': options.projects })
     entries = sort_results(entries, sort, reverse)
     print_results(entries, fields)
 
