@@ -30,7 +30,7 @@ import prettytable
 
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
-GERRIT_CMD = ('gerrit', 'query', '--format=JSON')
+GERRIT_CMD = ('gerrit', 'query', '--format=JSON', "--current-patch-set")
 
 
 def tiny_p(cmd, capture=True):
@@ -99,6 +99,19 @@ def _get_date(k, row):
     except (TypeError, ValueError):
         return ''
 
+def _get_approvals(k, row):
+    approvals = row["currentPatchSet"].get("approvals", [])
+    vals = {}
+    for approval in approvals:
+        gottype = approval["type"][0:1].lower()
+        if gottype not in vals:
+            vals[gottype] = []
+        vals[gottype].append(approval["value"])
+
+    keys = vals.keys()
+    keys.sort(reverse=True)
+    return " ".join(map(lambda val: "%s=%s" % (val, ",".join(vals[val])), keys))
+
 allfields = [
     { 'key': "status", 'label': "Status", 'mapfunc': _get_key },
     { 'key': "topic", 'label': "Topic", 'mapfunc': _get_key, "truncate": 20 },
@@ -107,6 +120,7 @@ allfields = [
     { 'key': "subject", 'label': "Subject", 'mapfunc': _get_key, "truncate": 50 },
     { 'key': "createdOn", 'label': "Created", 'mapfunc': _get_date },
     { 'key': "lastUpdated",'label': "Updated", 'mapfunc': _get_date },
+    { 'key': "approvals", 'label': "Approvals", 'mapfunc': _get_approvals },
 ]
 
 
@@ -142,8 +156,35 @@ def print_results(results, fields):
     if len(num_seen):
         print(table.get_string())
 
+#
+# approval == vN - verification passed value N
+# approval == cN - code review passed value N
+#
+def matches_approval(result, approval):
+    rules = approval.split(",")
+    requires = {}
 
-def get_info(loginname, keyfile, terms):
+    for rule in rules:
+        requires[rule[0:1]] = int(rule[1:])
+
+    got = {}
+    for approval in result["currentPatchSet"].get("approvals", []):
+        gottype = approval["type"][0:1].lower()
+        gotval = int(approval["value"])
+        # Record lowest flag value
+        if gottype not in got or got[gottype] > gotval:
+            got[gottype] = gotval
+
+    for rule in requires.keys():
+        if rule not in got:
+            return False
+        if got[rule] < requires[rule]:
+            return False
+
+    return True
+        
+
+def get_info(loginname, keyfile, terms, approval):
     clauses = []
     for term in terms:
         if len(terms[term]) == 0:
@@ -153,7 +194,11 @@ def get_info(loginname, keyfile, terms):
         if clause != "":
             clauses.append(clause)
     query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
-    return run_query(loginname, query, keyfile)
+    results = run_query(loginname, query, keyfile)
+    if approval is not None:
+        results = filter(lambda result: matches_approval(result, approval), results)
+    return results
+
 
 def _get_key_path():
     home_dir = os.path.expanduser("~")
@@ -195,6 +240,9 @@ def main():
     parser.add_option("-p", "--project", dest="projects", action='append',
                       help="gather information on given project", metavar="PROJECT",
                       default=[])
+    parser.add_option("-a", "--approval", dest="approval", action="store",
+                      help="filter on approval value min %n [default: no filter]",
+                      metavar="APPROVAL", default=None)
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
@@ -257,7 +305,8 @@ def main():
                        { "owner": list(options.users),
                          "status": options.statuses,
                          'message': options.messages,
-                         'project': options.projects })
+                         'project': options.projects },
+                       options.approval)
     entries = sort_results(entries, sort, reverse)
     print_results(entries, fields)
 
