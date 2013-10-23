@@ -23,6 +23,7 @@ import optparse
 import os
 import subprocess
 import sys
+import re
 
 from datetime import datetime
 
@@ -30,7 +31,7 @@ import prettytable
 
 GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
-GERRIT_CMD = ('gerrit', 'query', '--format=JSON', "--current-patch-set")
+GERRIT_CMD = ('gerrit', 'query', '--format=JSON', "--current-patch-set", "--files")
 
 
 def tiny_p(cmd, capture=True):
@@ -156,6 +157,14 @@ def print_results(results, fields):
     if len(num_seen):
         print(table.get_string())
 
+def matches_file(result, files):
+    for filere in files:
+        for fileentry in result["currentPatchSet"]["files"]:
+            filename = fileentry["file"]
+            if re.search(filere, filename):
+                return True
+    return False
+
 #
 # approval == vN - verification passed value N
 # approval == cN - code review passed value N
@@ -184,7 +193,7 @@ def matches_approval(result, approval):
     return True
         
 
-def get_info(loginname, keyfile, terms, approval):
+def get_info(loginname, keyfile, terms, approval, files):
     clauses = []
     for term in terms:
         if len(terms[term]) == 0:
@@ -195,6 +204,8 @@ def get_info(loginname, keyfile, terms, approval):
             clauses.append(clause)
     query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
     results = run_query(loginname, query, keyfile)
+    if files is not None and len(files) > 0:
+        results = filter(lambda result: matches_file(result, files), results)
     if approval is not None:
         results = filter(lambda result: matches_approval(result, approval), results)
     return results
@@ -306,7 +317,8 @@ def main():
                          "status": options.statuses,
                          'message': options.messages,
                          'project': options.projects },
-                       options.approval)
+                       options.approval,
+                       args)
     entries = sort_results(entries, sort, reverse)
     print_results(entries, fields)
 
