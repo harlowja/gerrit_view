@@ -274,6 +274,7 @@ class ZuulTable(urwid.ListBox):
             self.right_footer,
         ]
         self.footer = urwid.AttrWrap(urwid.Columns(footer_pieces), 'body')
+        self.last_refreshed = None
 
     def _find_pipeline(self, name):
         for b in self.body:
@@ -306,34 +307,44 @@ class ZuulTable(urwid.ListBox):
     def refresh(self):
         zuul_data = dict(self.source.data)
         pipes = {}
-        for p in zuul_data.get('pipelines', []):
-            if not p.get("name"):
-                continue
-            pipe_name = p['name']
-            if len(self.allowed_pipelines) \
-               and pipe_name.lower() not in self.allowed_pipelines:
-                continue
-            pipes[pipe_name] = str(p.get("description", "")).strip()
-        pipe_names = set(pipes.keys())
-        to_delete = self.pipelines - pipe_names
-        to_add = pipe_names - self.pipelines
-        for p in to_delete:
-            self._remove_pipeline(p)
-        for p in sorted(to_add):
-            self.body.append(ZuulPipeline(p, pipes[p]))
-        self.pipelines = pipe_names
-        p_refreshed = 0
-        r_refreshed = 0
-        for p in sorted(self.pipelines):
-            pipeline = self._find_pipeline(p)
-            assert pipeline is not None, "Pipeline %s not found" % (p)
+        should_refresh = False
+        if self.last_refreshed is None and len(zuul_data):
+            should_refresh = True
+        elif len(zuul_data) and self.last_refreshed is not None:
+            fetched_when = zuul_data['__fetched_when']
+            if self.last_refreshed < fetched_when:
+                should_refresh = True
+        if should_refresh:
             for p in zuul_data.get('pipelines', []):
-                if p.get("name") != pipeline.name:
+                if not p.get("name"):
                     continue
-                r_refreshed += self._update_pipeline(pipeline, p)
-                p_refreshed += 1
-        msg = "(%sa, %sd, %sr)" % (len(to_add), len(to_delete), r_refreshed)
-        self.right_footer.set_text("%s pipelines %s" % (p_refreshed, msg))
+                pipe_name = p['name']
+                if len(self.allowed_pipelines) \
+                   and pipe_name.lower() not in self.allowed_pipelines:
+                    continue
+                pipes[pipe_name] = str(p.get("description", "")).strip()
+            pipe_names = set(pipes.keys())
+            to_delete = self.pipelines - pipe_names
+            to_add = pipe_names - self.pipelines
+            for p in to_delete:
+                self._remove_pipeline(p)
+            for p in sorted(to_add):
+                self.body.append(ZuulPipeline(p, pipes[p]))
+            self.pipelines = pipe_names
+            p_refreshed = 0
+            r_refreshed = 0
+            for p in sorted(self.pipelines):
+                pipeline = self._find_pipeline(p)
+                assert pipeline is not None, "Pipeline %s not found" % (p)
+                for p in zuul_data.get('pipelines', []):
+                    if p.get("name") != pipeline.name:
+                        continue
+                    r_refreshed += self._update_pipeline(pipeline, p)
+                    p_refreshed += 1
+            msg = "(%sa, %sd, %sr)" % (len(to_add), len(to_delete),
+                                       r_refreshed)
+            self.right_footer.set_text("%s pipelines %s" % (p_refreshed, msg))
+            self.last_refreshed = zuul_data['__fetched_when']
         if not zuul_data:
             self.source.event.set()
         else:
