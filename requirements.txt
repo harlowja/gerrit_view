@@ -1,4 +1,5 @@
 gerritlib
 prettytable
+requests
 six
 urwid

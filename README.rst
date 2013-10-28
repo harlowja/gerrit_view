@@ -62,6 +62,26 @@ urwid_ and the curses_ library):
       -i COUNT, --items=COUNT
                             how many items to keep visible [default: 50]
 
+czuul
+------------
+
+Use `czuul` to watch the reviews zuul status (powered by
+urwid_, curses_ library and the requests_ library):
+
+::
+
+    $ czuul
+    $ czuul -h
+    
+    Usage: czuul [options]
+    
+    Options:
+      -h, --help            show this help message and exit
+      -s URL, --server=URL  zuul server [default:
+                            http://zuul.openstack.org/status.json]
+      -p PIPELINE, --pipeline=PIPELINE
+                            only show given pipelines reviews
 
 .. _urwid: http://excess.org/urwid/
 .. _curses: http://docs.python.org/2.7/library/curses.html
+.. _requests: http://www.python-requests.org/
