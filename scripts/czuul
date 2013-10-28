@@ -1,0 +1,389 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# vim: tabstop=4 shiftwidth=4 softtabstop=4
+
+#    Copyright (C) 2013 Yahoo! Inc. All Rights Reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
+
+import functools
+import logging
+import optparse
+import sys
+import threading
+
+import requests
+import urwid
+
+from datetime import (datetime, timedelta)
+
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s %(levelname)s: %(message)s',
+                    stream=sys.stderr)
+LOG = logging.getLogger(__name__)
+
+### DEFAULT SETTINGS
+
+ZUUL_URL = 'http://zuul.openstack.org/status.json'
+ZUUL_FREQ = 30
+ZUUL_TIMEOUT = ZUUL_FREQ / 2.0
+ALARM_FREQ = 1.0
+
+### GUI CONSTANTS
+
+DEF_PILE = ('weight', 1)
+PALETTE = (
+    # General gui usage
+    ('body', urwid.DEFAULT, urwid.DEFAULT),
+    ('title', urwid.LIGHT_CYAN, urwid.DEFAULT, 'standout'),
+    ('clear', urwid.WHITE, urwid.DEFAULT, 'standout'),
+    # Time usage
+    ('ok', urwid.LIGHT_GREEN, urwid.DEFAULT),
+    ('dead', urwid.DARK_RED, urwid.DEFAULT, 'bold,underline'),
+    ('slow', urwid.YELLOW, urwid.DEFAULT),
+    ('veryslow', urwid.LIGHT_RED, urwid.DEFAULT),
+    ('superslow', urwid.LIGHT_MAGENTA, urwid.DEFAULT, 'bold,underline'),
+    # Progress bar usage
+    ('normal', urwid.WHITE, urwid.DARK_GRAY),
+    ('complete', urwid.WHITE, urwid.DARK_BLUE),
+    ('smooth', urwid.WHITE, urwid.LIGHT_BLUE),
+)
+
+
+def select_time_attr(secs):
+    secs = max(0, int(secs))
+    if secs <= 300:
+        return 'ok'
+    if secs <= 600:
+        return 'slow'
+    if secs <= 1800:
+        return 'veryslow'
+    return 'superslow'
+
+
+def format_time(millis, secs, mins):
+    if mins <= 0.0:
+        return "%ss/0m" % (secs)
+    else:
+        return "%ss/%0.1fm" % (secs, mins)
+
+
+def calculate_completion(item):
+    jobs_total = 0
+    jobs_remaining = 0
+    for j in item.get("jobs", []):
+        jobs_total += 1
+        if get_int_key("remaining_time", j) > 0:
+            jobs_remaining += 1
+    try:
+        jobs_finished = max(0, jobs_total - jobs_remaining)
+        percent_complete = float(jobs_finished) / jobs_total
+        if percent_complete > 1.0:
+            return 1.0
+        if percent_complete < 0:
+            return 0.0
+        return percent_complete
+    except ZeroDivisionError:
+        return 1.0
+
+
+def decode_millis(millis):
+    if millis < 0:
+        millis = 0
+    secs = millis / 1000
+    minutes = secs / 60.0
+    return (secs, minutes)
+
+
+def get_int_key(k, in_what, default=0):
+    try:
+        return int(in_what[k])
+    except (KeyError, ValueError, TypeError):
+        return default
+
+
+class ZuulWatcher(threading.Thread):
+    def __init__(self, url):
+        super(ZuulWatcher, self).__init__()
+        self.url = url
+        self.daemon = True
+        self.data = {}
+        self.event = threading.Event()
+
+    def run(self):
+        while True:
+            self.event.wait()
+            response = None
+            try:
+                response = requests.get(self.url, timeout=ZUUL_TIMEOUT)
+            except requests.RequestException:
+                LOG.exception("Failed fetching zuul data from %s", self.url)
+            if response:
+                try:
+                    data = response.json()
+                    if isinstance(data, (dict)):
+                        self.data = dict(data)
+                        self.data['__fetched_when'] = datetime.now()
+                    else:
+                        raise TypeError("Expected dict type, got '%s'"
+                                        % type(data))
+                except (ValueError, TypeError):
+                    LOG.exception("Failed extracting/caching zuul data")
+            self.event.clear()
+
+
+class ZuulReview(urwid.Pile):
+    def __init__(self, review):
+        super(ZuulReview, self).__init__([])
+        self.review_id = review['id']
+        self.jobs = {}
+        self.progress_bar = urwid.ProgressBar('normal', 'complete',
+                                              0.0, 1.0, 'smooth')
+        self.progress_bar.set_completion(0.0)
+        title_pieces = [("title", self.review_id)]
+        if review.get("url"):
+            title_pieces.append(("body", " @ %s" % (review['url'])))
+        title = urwid.Text(title_pieces)
+        eta = urwid.AttrMap(urwid.Text("ETA", align='right'), 'clear')
+        rows = [
+            urwid.Columns([title, eta]),
+            self.progress_bar,
+        ]
+        for item in rows:
+            self.contents.append((item, DEF_PILE))
+
+    def refresh(self, review):
+        if review.get("id") != self.review_id:
+            return
+        new_jobs = []
+        for j in review.get("jobs", []):
+            if not j.get("name"):
+                continue
+            j_name = j['name']
+            j_name = j_name.strip()
+            millis = get_int_key("remaining_time", j)
+            (secs, mins) = decode_millis(millis)
+            time_add_on = ""
+            if j.get("result") == 'FAILURE' and j.get("voting"):
+                time_attr = 'dead'
+                time_add_on = "!"
+            else:
+                time_attr = select_time_attr(secs)
+            time_txt = format_time(millis, secs, mins) + time_add_on
+            if j_name in self.jobs:
+                (name, remaining) = self.jobs[j_name]
+                remaining_txt = remaining.original_widget
+                remaining_txt.set_text(time_txt)
+                remaining.set_attr_map({None: time_attr})
+            else:
+                remaining_txt = urwid.Text(time_txt, align='right')
+                self.jobs[j_name] = [
+                    urwid.Text("- %s" % j_name, align='left'),
+                    urwid.AttrMap(remaining_txt, time_attr),
+                ]
+                new_jobs.append(j_name)
+        if new_jobs:
+            (p_bar, p_bar_options) = self.contents.pop()
+            for j_name in sorted(new_jobs):
+                cols = urwid.Columns(self.jobs[j_name])
+                self.contents.append((cols, DEF_PILE))
+            self.contents.append((p_bar, p_bar_options))
+        self.progress_bar.set_completion(calculate_completion(review))
+
+
+class ZuulPipeline(urwid.Pile):
+    def __init__(self, name, description):
+        self.name = str(name)
+        if self.name:
+            d_name = self.name.title()
+        else:
+            d_name = "???"
+        super(ZuulPipeline, self).__init__([])
+        title_pieces = [('clear', d_name)]
+        if description:
+            description = description[0].lower() + description[1:]
+            title_pieces.append(("body", ", %s" % description))
+        rows = [
+            urwid.Divider(u'─'),
+            urwid.Text(title_pieces),
+            urwid.Divider(u'─')
+        ]
+        for h in rows:
+            self.contents.append((h, DEF_PILE))
+        self.name = name
+
+    def refresh(self, review):
+        if not review or not review.get("id"):
+            return
+        review_id = review['id']
+        match = -1
+        for (i, item) in enumerate(self.contents):
+            item = item[0]
+            if isinstance(item, ZuulReview):
+                if item.review_id == review_id:
+                    match = i
+                    break
+        if match != -1:
+            review_item = self.contents[match][0]
+        else:
+            review_item = ZuulReview(review)
+            self.contents.append((review_item, DEF_PILE))
+        review_item.refresh(review)
+
+    def prune(self, review_ids):
+        my_ids = set()
+        for (i, item) in enumerate(self.contents):
+            item = item[0]
+            if isinstance(item, ZuulReview):
+                my_ids.add(item.review_id)
+        unknown_ids = my_ids - set(review_ids)
+        for review_id in sorted(unknown_ids):
+            match = -1
+            for (i, item) in enumerate(self.contents):
+                item = item[0]
+                if isinstance(item, ZuulReview):
+                    if item.review_id == review_id:
+                        match = i
+                        break
+            if match != -1:
+                self.contents.pop(match)
+
+
+class ZuulTable(urwid.ListBox):
+    def __init__(self, source, event, allowed_pipelines=()):
+        super(ZuulTable, self).__init__(urwid.SimpleFocusListWalker([]))
+        self.source = source
+        self.event = event
+        self.pipelines = set()
+        self.allowed_pipelines = set(allowed_pipelines)
+        self.right_footer = urwid.Text('', align='right')
+        self.left_footer = urwid.Text('', align='left')
+        footer_pieces = [
+            self.left_footer,
+            self.right_footer,
+        ]
+        self.footer = urwid.AttrWrap(urwid.Columns(footer_pieces), 'body')
+
+    def _find_pipeline(self, name):
+        for b in self.body:
+            if isinstance(b, ZuulPipeline):
+                if b.name == name:
+                    return b
+        return None
+
+    def _remove_pipeline(self, name):
+        for (i, b) in enumerate(self.body):
+            if isinstance(b, ZuulPipeline):
+                if b.name == name:
+                    self.body.pop(i)
+                    break
+
+    def _update_pipeline(self, pipeline, data):
+        if not data:
+            data = {}
+        review_ids = set()
+        for q in data.get('change_queues', []):
+            for h in q.get('heads', []):
+                for item in h:
+                    if not item.get("id"):
+                        continue
+                    pipeline.refresh(item)
+                    review_ids.add(item['id'])
+        pipeline.prune(review_ids)
+        return len(review_ids)
+
+    def refresh(self):
+        zuul_data = dict(self.source.data)
+        pipes = {}
+        for p in zuul_data.get('pipelines', []):
+            if not p.get("name"):
+                continue
+            pipe_name = p['name']
+            if len(self.allowed_pipelines) \
+               and pipe_name not in self.allowed_pipelines:
+                continue
+            pipes[pipe_name] = str(p.get("description", "")).strip()
+        pipe_names = set(pipes.keys())
+        to_delete = self.pipelines - pipe_names
+        to_add = pipe_names - self.pipelines
+        for p in to_delete:
+            self._remove_pipeline(p)
+        for p in sorted(to_add):
+            self.body.append(ZuulPipeline(p, pipes[p]))
+        self.pipelines = pipe_names
+        p_refreshed = 0
+        r_refreshed = 0
+        for p in sorted(self.pipelines):
+            pipeline = self._find_pipeline(p)
+            assert pipeline is not None, "Pipeline %s not found" % (p)
+            for p in zuul_data.get('pipelines', []):
+                if p.get("name") != pipeline.name:
+                    continue
+                r_refreshed += self._update_pipeline(pipeline, p)
+                p_refreshed += 1
+        msg = "(%sa, %sd, %sr)" % (len(to_add), len(to_delete), r_refreshed)
+        self.right_footer.set_text("%s pipelines %s" % (p_refreshed, msg))
+        if not zuul_data:
+            self.source.event.set()
+        else:
+            fetched_when = zuul_data['__fetched_when']
+            now = datetime.now()
+            expected_fetch = fetched_when + timedelta(seconds=ZUUL_FREQ)
+            much_longer = expected_fetch - now
+            if (expected_fetch <= now) or (much_longer.seconds <= 0):
+                self.source.event.set()
+                self.left_footer.set_text("Refresh expected anytime now...")
+            else:
+                self.left_footer.set_text("Refresh in %s seconds..."
+                                          % (much_longer.seconds))
+
+
+def refresh_zuul(loop, zuul_table):
+    zuul_table.refresh()
+
+
+def on_unhandled_input(key):
+    if key in ('q', 'Q', 'esc'):
+        raise urwid.ExitMainLoop()
+
+
+def on_idle(loop, zuul_table):
+    loop.set_alarm_in(ALARM_FREQ, refresh_zuul, user_data=zuul_table)
+
+
+def main():
+    parser = optparse.OptionParser()
+    parser.add_option("-s", "--server", dest="server", action='store',
+                      help="zuul server [default: %default]",
+                      metavar="URL", default=ZUUL_URL)
+    parser.add_option("-p", "--pipeline", dest="pipelines", action='append',
+                      help="only show given pipelines reviews",
+                      metavar="PIPELINE", default=[])
+    (options, args) = parser.parse_args()
+
+    watcher = ZuulWatcher(options.server)
+    zuul_table = ZuulTable(watcher, options.pipelines)
+    zuul_table.left_footer.set_text("Initializing...")
+    frame = urwid.Frame(urwid.LineBox(urwid.AttrWrap(zuul_table, 'body')),
+                        footer=zuul_table.footer)
+    loop = urwid.MainLoop(frame, PALETTE,
+                          handle_mouse=False,
+                          unhandled_input=on_unhandled_input)
+    watcher.start()
+    loop.event_loop.enter_idle(functools.partial(on_idle, loop, zuul_table))
+    loop.run()
+
+
+if __name__ == "__main__":
+    main()
