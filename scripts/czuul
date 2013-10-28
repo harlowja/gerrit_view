@@ -157,7 +157,7 @@ class ZuulReview(urwid.Pile):
         title = urwid.Text(title_pieces)
         eta = urwid.AttrMap(urwid.Text("ETA", align='right'), 'clear')
         rows = [
-            urwid.Columns([title, eta]),
+            urwid.Columns([title, (urwid.FIXED, 6, eta)]),
             self.progress_bar,
         ]
         for item in rows:
