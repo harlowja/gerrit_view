@@ -28,7 +28,7 @@ import urwid
 
 from datetime import (datetime, timedelta)
 
-logging.basicConfig(level=logging.INFO,
+logging.basicConfig(level=logging.ERROR,
                     format='%(asctime)s %(levelname)s: %(message)s',
                     stream=sys.stderr)
 LOG = logging.getLogger(__name__)
