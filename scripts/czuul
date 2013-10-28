@@ -196,8 +196,9 @@ class ZuulReview(urwid.Pile):
         if new_jobs:
             (p_bar, p_bar_options) = self.contents.pop()
             for j_name in sorted(new_jobs):
-                cols = urwid.Columns(self.jobs[j_name])
-                self.contents.append((cols, DEF_PILE))
+                (name_txt, time_txt) = self.jobs[j_name]
+                rows = [name_txt, (urwid.WEIGHT, 0.333, time_txt)]
+                self.contents.append((urwid.Columns(rows), DEF_PILE))
             self.contents.append((p_bar, p_bar_options))
         self.progress_bar.set_completion(calculate_completion(review))
 
