@@ -44,7 +44,7 @@ def _long_description():
 
 
 setup(name='gerrit-view',
-      version='0.1.1',
+      version='0.2',
       description='Gerrit viewer tools',
       author="Joshua Harlow",
       author_email='harlowja@yahoo-inc.com',
@@ -52,6 +52,7 @@ setup(name='gerrit-view',
       scripts=[
           _path(os.path.join('scripts', 'cgerrit')),
           _path(os.path.join('scripts', 'qgerrit')),
+          _path(os.path.join('scripts', 'czuul')),
       ],
       license="ASL 2.0",
       install_requires=_requirements(),
