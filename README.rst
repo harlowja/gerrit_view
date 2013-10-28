@@ -68,6 +68,8 @@ czuul
 Use `czuul` to watch the reviews zuul status (powered by
 urwid_, curses_ library and the requests_ library):
 
+.. image:: https://github.com/harlowja/gerrit_view/raw/master/screenshots/screen2.png
+
 ::
 
     $ czuul
