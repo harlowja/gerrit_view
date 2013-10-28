@@ -1,5 +1,5 @@
-**Gerrit viewers & tools for all**
-==================================
+**Gerrit & zuul viewers & tools for all**
+=========================================
 
 qgerrit
 ------------
