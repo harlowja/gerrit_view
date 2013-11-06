@@ -364,6 +364,9 @@ def main():
                       help="gather information on given project",
                       metavar="PROJECT",
                       default=[])
+    parser.add_option("-b", "--branch", dest="branches", action='append',
+                      help="filter on branch", metavar="BRANCH",
+                      default=[])
     parser.add_option("-a", "--approval", dest="approval", action="store",
                       help="filter on approval value min %n"
                            " [default: no filter]",
@@ -436,6 +439,7 @@ def main():
                            "status": list(uniq_itr(options.statuses)),
                            'message': list(uniq_itr(options.messages)),
                            'project': list(uniq_itr(options.projects)),
+                           'branch': list(uniq_itr(options.branches)),
                        },
                        options.approval,
                        args)
