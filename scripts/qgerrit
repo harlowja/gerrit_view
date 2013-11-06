@@ -327,6 +327,7 @@ ALL_FIELDS = [
     {'key': "url", 'label': "URL", 'mapfunc': get_key},
     {'key': "owner", 'label': "Owner", 'mapfunc': get_owner},
     {'key': "project", 'label': "Project", 'mapfunc': get_key},
+    {'key': "branch", 'label': "Branch", 'mapfunc': get_key},
     {'key': "subject", 'label': "Subject", 'mapfunc': get_key, "truncate": 50},
     {'key': "createdOn", 'label': "Created", 'mapfunc': get_date},
     {'key': "lastUpdated", 'label': "Updated", 'mapfunc': get_date},
