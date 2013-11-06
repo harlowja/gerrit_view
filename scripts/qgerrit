@@ -228,7 +228,10 @@ def matches_approval(result, approval):
     except (KeyError, TypeError):
         approvals = []
 
-    got = {}
+    got = {
+        'c': 0,
+        'v': 0,
+    }
     for approval in approvals:
         got_type = approval["type"][0:1].lower()
         got_val = int(approval["value"])
