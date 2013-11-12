@@ -249,33 +249,17 @@ def matches_approval(result, approval):
     return True
 
 
-def get_info(login_name, keyfile, terms, approval, files):
+def get_info(loginname, keyfile, terms, approval, files):
     clauses = []
-    for term in sorted(terms.keys()):
-        if len(terms.get(term, [])) == 0:
+    for term in terms:
+        if len(terms[term]) == 0:
             continue
-        segments = map(lambda value: "%s:%s" % (term, value),
-                       sorted(terms[term]))
-        if len(segments):
-            clauses.extend(segments)
-    # NOTE(harlowja): gerrit doesn't seem to do the operators correctly so do
-    # some adjustments to make it do it in a way that works...
-    queries = []
-    for c in clauses:
-        sub_query = []
-        c_term = c.split(":", 1)[0]
-        for e in clauses:
-            e_term = e.split(":", 1)[0]
-            if (e != c and e_term != c_term):
-                sub_query.append(e)
-        if len(sub_query) > 1:
-            queries.append("(%s AND (%s))" % (c, " OR ".join(sub_query)))
-        elif len(sub_query) == 1:
-            queries.append("(%s AND %s)" % (c, sub_query[0]))
-        else:
-            queries.append(c)
-    root_query = " OR ".join(queries)
-    results = run_query(login_name, root_query, keyfile)
+        clause = " OR ".join(map(lambda value: "%s:%s" % (term, value),
+                             terms[term]))
+        if clause != "":
+            clauses.append(clause)
+    query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
+    results = run_query(loginname, query, keyfile)
     if files is not None and len(files) > 0:
         results = filter(lambda result: matches_file(result, files), results)
     if approval is not None:
@@ -330,6 +314,7 @@ ALL_FIELDS = [
     {'key': "url", 'label': "URL", 'mapfunc': get_key},
     {'key': "owner", 'label': "Owner", 'mapfunc': get_owner},
     {'key': "project", 'label': "Project", 'mapfunc': get_key},
+    {'key': "branch", 'label': "Branch", 'mapfunc': get_key},
     {'key': "subject", 'label': "Subject", 'mapfunc': get_key, "truncate": 50},
     {'key': "createdOn", 'label': "Created", 'mapfunc': get_date},
     {'key': "lastUpdated", 'label': "Updated", 'mapfunc': get_date},
@@ -365,6 +350,9 @@ def main():
     parser.add_option("-p", "--project", dest="projects", action='append',
                       help="gather information on given project",
                       metavar="PROJECT",
+                      default=[])
+    parser.add_option("-b", "--branch", dest="branches", action='append',
+                      help="filter on branch", metavar="BRANCH",
                       default=[])
     parser.add_option("-a", "--approval", dest="approval", action="store",
                       help="filter on approval value min %n"
@@ -438,6 +426,7 @@ def main():
                            "status": list(uniq_itr(options.statuses)),
                            'message': list(uniq_itr(options.messages)),
                            'project': list(uniq_itr(options.projects)),
+                           'branch': list(uniq_itr(options.branches)),
                        },
                        options.approval,
                        args)
