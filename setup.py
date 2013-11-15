@@ -44,7 +44,7 @@ def _long_description():
 
 
 setup(name='gerrit-view',
-      version='0.2',
+      version='0.2.1',
       description='Gerrit viewer tools',
       author="Joshua Harlow",
       author_email='harlowja@yahoo-inc.com',
