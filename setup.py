@@ -27,24 +27,8 @@ def _path(fn):
     return os.path.join(os.path.dirname(__file__), fn)
 
 
-def _requirements():
-    reqs = []
-    with open(_path("requirements.txt"), 'rb') as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            reqs.append(line)
-    return reqs
-
-
-def _long_description():
-    with open(_path("README.rst"), 'rb') as fh:
-        return fh.read()
-
-
 setup(name='gerrit-view',
-      version='0.2.1',
+      version='0.2.2',
       description='Gerrit viewer tools',
       author="Joshua Harlow",
       author_email='harlowja@yahoo-inc.com',
@@ -55,7 +39,13 @@ setup(name='gerrit-view',
           _path(os.path.join('scripts', 'czuul')),
       ],
       license="ASL 2.0",
-      install_requires=_requirements(),
+      install_requires=[
+          'gerritlib',
+          'prettytable',
+          'requests',
+          'six',
+          'urwid',
+      ],
       classifiers=[
         "Development Status :: 4 - Beta",
         "Topic :: Utilities",
@@ -64,5 +54,5 @@ setup(name='gerrit-view',
         "Programming Language :: Python",
       ],
       keywords="gerrit curses urwid console",
-      long_description=_long_description(),
+      long_description='Gerrit & zuul viewers & tools for all',
      )
