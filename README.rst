@@ -22,16 +22,18 @@ Use `qgerrit` to find out what your friends have been up to::
                             filter on message
       -p PROJECT, --project=PROJECT
                             gather information on given project
+      -b BRANCH, --branch=BRANCH
+                            filter on branch
       -a APPROVAL, --approval=APPROVAL
                             filter on approval value min %n [default: no filter]
       -k FILE, --keyfile=FILE
-                            gerrit ssh keyfile [default:
-                            /homes/harlowja/.ssh/id_rsa]
+                            gerrit ssh keyfile [default: /home/josh/.ssh/id_rsa]
       -t SORT, --sort=SORT  sort order for results [default: createdOn]
       -f FIELD, --field=FIELD
                             display field in results [default: 'approvals',
-                            'createdOn', 'lastUpdated', 'owner', 'project',
-                            'status', 'subject', 'topic', 'url']
+                            'branch', 'createdOn', 'lastUpdated', 'owner',
+                            'project', 'status', 'subject', 'topic', 'url']
+    
 
 cgerrit
 ------------
