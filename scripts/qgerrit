@@ -118,6 +118,9 @@ def get_key(k, row):
     v = row.get(k)
     if v is None:
         return ""
+
+    if isinstance(v, unicode):
+        v = v.encode('utf8')
     return str(v)
 
 
