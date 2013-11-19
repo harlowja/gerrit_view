@@ -70,6 +70,8 @@ def tiny_p(cmd, capture=True, ok_rcs=(0,)):
 
 
 def server_cmd(login_name, port=GERRIT_PORT, host=GERRIT_HOST):
+    LOG.debug("port = {}".format(port))
+    LOG.debug("host = {}".format(host))
     pieces = []
     if login_name:
         pieces.extend(['%s@%s' % (login_name, host), '-p', port])
@@ -78,11 +80,11 @@ def server_cmd(login_name, port=GERRIT_PORT, host=GERRIT_HOST):
     return [str(p) for p in pieces]
 
 
-def run_query(login_name, query, key_file):
+def run_query(login_name, query, key_file, port, hostname):
     cmd = ['ssh']
     if key_file and os.path.isfile(key_file):
         cmd.extend(['-i', str(key_file)])
-    cmd.extend(server_cmd(login_name))
+    cmd.extend(server_cmd(login_name, port=port, host=hostname))
     cmd.extend(GERRIT_CMD)
     cmd.append(query)
     (stdout, _stderr) = tiny_p(cmd)
@@ -116,6 +118,9 @@ def get_key(k, row):
     v = row.get(k)
     if v is None:
         return ""
+
+    if isinstance(v, unicode):
+        v = v.encode('utf8')
     return str(v)
 
 
@@ -249,7 +254,7 @@ def matches_approval(result, approval):
     return True
 
 
-def get_info(loginname, keyfile, terms, approval, files):
+def get_info(loginname, keyfile, terms, approval, port, hostname, files):
     clauses = []
     for term in terms:
         if len(terms[term]) == 0:
@@ -259,7 +264,7 @@ def get_info(loginname, keyfile, terms, approval, files):
         if clause != "":
             clauses.append(clause)
     query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
-    results = run_query(loginname, query, keyfile)
+    results = run_query(loginname, query, keyfile, port, hostname)
     if files is not None and len(files) > 0:
         results = filter(lambda result: matches_file(result, files), results)
     if approval is not None:
@@ -358,6 +363,12 @@ def main():
                       help="filter on approval value min %n"
                            " [default: no filter]",
                       metavar="APPROVAL", default=None)
+    parser.add_option("-g", "--gerrit", dest="instance", action='store',
+                      help="server address of the gerrit instance",
+                      metavar="INSTANCE", default=GERRIT_HOST)
+    parser.add_option("-r", "--port", dest="port", action='store',
+                      help="port of the gerrit instance",
+                      metavar="PORT", default=GERRIT_PORT)
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=get_key_path())
@@ -429,6 +440,8 @@ def main():
                            'branch': list(uniq_itr(options.branches)),
                        },
                        options.approval,
+                       options.port,
+                       options.instance,
                        args)
     entries = sort_results(entries, sort_by, reverse)
     print_results(entries, fields)
