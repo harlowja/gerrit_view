@@ -327,7 +327,7 @@ class ZuulList(urwid.ListBox):
                     all_pipeline_names.append(pipe_name)
                     if not self.selector(pipe_name.lower()):
                         continue
-                pipes[pipe_name] = str(p.get("description", "")).strip()
+                    pipes[pipe_name] = str(p.get("description", "")).strip()
             pipe_names = set(pipes.keys())
             to_delete = self.pipelines - pipe_names
             to_add = pipe_names - self.pipelines
