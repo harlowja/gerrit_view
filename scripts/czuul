@@ -126,7 +126,7 @@ class ZuulWatcher(threading.Thread):
 
     def run(self):
         while True:
-            self.event.wait()
+            self.event.wait(timeout=ZUUL_FREQ)
             response = None
             try:
                 response = requests.get(self.url, timeout=ZUUL_TIMEOUT)
@@ -430,7 +430,7 @@ def main():
     footers = (left_footer, right_footer)
     allowed_pipelines = frozenset([p.lower() for p in options.pipelines])
 
-    buckets = list(chunk_it(BUCKET_CHARS, len(BUCKET_CHARS)/SCREENS))
+    buckets = list(chunk_it(BUCKET_CHARS, len(BUCKET_CHARS) / SCREENS))
     if len(buckets) > SCREENS:
         # Handle overflow (not even splits)
         last_bucket = buckets.pop()
@@ -442,7 +442,7 @@ def main():
     for i in range(0, SCREENS):
         z = ZuulList(watcher,
                      make_selector(buckets[i], allowed_pipelines), footers,
-                     owner=bool(i == 0), neighbors=raw_lists)
+                     owner=bool(i == (SCREENS - 1)), neighbors=raw_lists)
         raw_lists.append(z)
         formatted_lists.append(urwid.LineBox(urwid.AttrWrap(z, 'body')))
 
