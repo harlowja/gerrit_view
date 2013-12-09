@@ -20,6 +20,7 @@
 import functools
 import logging
 import optparse
+import string
 import sys
 import threading
 
@@ -39,6 +40,8 @@ ZUUL_URL = 'http://zuul.openstack.org/status.json'
 ZUUL_FREQ = 30
 ZUUL_TIMEOUT = ZUUL_FREQ / 2.0
 ALARM_FREQ = 1.0
+SCREENS = 3
+BUCKET_CHARS = sorted(set(string.ascii_letters.lower()))
 
 ### GUI CONSTANTS
 
@@ -261,19 +264,19 @@ class ZuulPipeline(urwid.Pile):
                 self.contents.pop(match)
 
 
-class ZuulTable(urwid.ListBox):
-    def __init__(self, source, allowed_pipelines=()):
-        super(ZuulTable, self).__init__(urwid.SimpleFocusListWalker([]))
+class ZuulList(urwid.ListBox):
+    def __init__(self, source, selector, footers, owner):
+        super(ZuulList, self).__init__(urwid.SimpleFocusListWalker([]))
         self.source = source
+        self.selector = selector
         self.pipelines = set()
-        self.allowed_pipelines = set(allowed_pipelines)
-        self.right_footer = urwid.Text('', align='right')
-        self.left_footer = urwid.Text('', align='left')
-        footer_pieces = [
-            self.left_footer,
-            self.right_footer,
-        ]
-        self.footer = urwid.AttrWrap(urwid.Columns(footer_pieces), 'body')
+        if owner:
+            self.left_footer = footers[0]
+            self.right_footer = footers[1]
+        else:
+            self.left_footer = None
+            self.right_footer = None
+        self.owner = owner
         self.last_refreshed = None
 
     def _find_pipeline(self, name):
@@ -315,13 +318,15 @@ class ZuulTable(urwid.ListBox):
             if self.last_refreshed < fetched_when:
                 should_refresh = True
         if should_refresh:
+            all_pipeline_names = []
             for p in zuul_data.get('pipelines', []):
                 if not p.get("name"):
                     continue
                 pipe_name = p['name']
-                if len(self.allowed_pipelines) \
-                   and pipe_name.lower() not in self.allowed_pipelines:
-                    continue
+                if len(pipe_name):
+                    all_pipeline_names.append(pipe_name)
+                    if not self.selector(pipe_name.lower()):
+                        continue
                 pipes[pipe_name] = str(p.get("description", "")).strip()
             pipe_names = set(pipes.keys())
             to_delete = self.pipelines - pipe_names
@@ -331,37 +336,43 @@ class ZuulTable(urwid.ListBox):
             for p in sorted(to_add):
                 self.body.append(ZuulPipeline(p, pipes[p]))
             self.pipelines = pipe_names
-            p_refreshed = 0
-            r_refreshed = 0
             for p in sorted(self.pipelines):
                 pipeline = self._find_pipeline(p)
                 assert pipeline is not None, "Pipeline %s not found" % (p)
                 for p in zuul_data.get('pipelines', []):
                     if p.get("name") != pipeline.name:
                         continue
-                    r_refreshed += self._update_pipeline(pipeline, p)
-                    p_refreshed += 1
-            msg = "(%sa, %sd, %sr)" % (len(to_add), len(to_delete),
-                                       r_refreshed)
-            self.right_footer.set_text("%s pipelines %s" % (p_refreshed, msg))
+                    self._update_pipeline(pipeline, p)
             self.last_refreshed = zuul_data['__fetched_when']
-        if not zuul_data:
-            self.source.event.set()
-        else:
-            fetched_when = zuul_data['__fetched_when']
-            now = datetime.now()
-            expected_fetch = fetched_when + timedelta(seconds=ZUUL_FREQ)
-            much_longer = expected_fetch - now
-            if (expected_fetch <= now) or (much_longer.seconds <= 0):
+            if self.owner:
+                self.right_footer.set_text("%s pipelines" %
+                                           (len(all_pipeline_names)))
+        if self.owner:
+            if not zuul_data:
                 self.source.event.set()
-                self.left_footer.set_text("Refresh expected anytime now...")
             else:
-                self.left_footer.set_text("Refresh in %s seconds..."
-                                          % (much_longer.seconds))
+                fetched_when = zuul_data['__fetched_when']
+                now = datetime.now()
+                expected_fetch = fetched_when + timedelta(seconds=ZUUL_FREQ)
+                much_longer = expected_fetch - now
+                if (expected_fetch <= now) or (much_longer.seconds <= 0):
+                    self.source.event.set()
+                    self.left_footer.set_text("Refresh expected anytime "
+                                              "now...")
+                else:
+                    self.left_footer.set_text("Refresh in %s seconds..."
+                                              % (much_longer.seconds))
 
 
-def refresh_zuul(loop, zuul_table):
-    zuul_table.refresh()
+def refresh_zuul(loop, zuul_tables):
+    for z in zuul_tables:
+        z.refresh()
+
+
+def chunk_it(l, n):
+    # From: http://stackoverflow.com/a/312464
+    for i in xrange(0, len(l), n):
+        yield l[i:i + n]
 
 
 def on_unhandled_input(key):
@@ -369,8 +380,21 @@ def on_unhandled_input(key):
         raise urwid.ExitMainLoop()
 
 
-def on_idle(loop, zuul_table):
-    loop.set_alarm_in(ALARM_FREQ, refresh_zuul, user_data=zuul_table)
+def on_idle(loop, zuul_tables):
+    loop.set_alarm_in(ALARM_FREQ, refresh_zuul, user_data=zuul_tables)
+
+
+def make_selector(bucket, allowed_pipelines):
+
+    def accept_pipe(pipeline_name):
+        if len(allowed_pipelines) and pipeline_name not in allowed_pipelines:
+            return False
+        if len(pipeline_name) == 0:
+            return False
+        c = pipeline_name[0].lower()
+        return c in bucket
+
+    return accept_pipe
 
 
 def main():
@@ -383,16 +407,35 @@ def main():
                       metavar="PIPELINE", default=[])
     (options, args) = parser.parse_args()
 
+    right_footer = urwid.Text('', align='right')
+    left_footer = urwid.Text('', align='left')
+    footers = (left_footer, right_footer)
+    allowed_pipelines = frozenset([p.lower() for p in options.pipelines])
+
+    buckets = list(chunk_it(BUCKET_CHARS, len(BUCKET_CHARS)/SCREENS))
+    if len(buckets) > SCREENS:
+        # Handle overflow (not even splits)
+        last_bucket = buckets.pop()
+        buckets[-1].extend(last_bucket)
+
     watcher = ZuulWatcher(options.server)
-    zuul_table = ZuulTable(watcher, [p.lower() for p in options.pipelines])
-    zuul_table.left_footer.set_text("Initializing...")
-    frame = urwid.Frame(urwid.LineBox(urwid.AttrWrap(zuul_table, 'body')),
-                        footer=zuul_table.footer)
+    raw_lists = []
+    formatted_lists = []
+    for i in range(0, SCREENS):
+        z = ZuulList(watcher,
+                     make_selector(buckets[i], allowed_pipelines),
+                     footers, owner=bool(i == 0))
+        raw_lists.append(z)
+        formatted_lists.append(urwid.LineBox(urwid.AttrWrap(z, 'body')))
+
+    left_footer.set_text("Initializing...")
+    footer = urwid.AttrWrap(urwid.Columns(footers), 'body')
+    frame = urwid.Frame(urwid.Columns(formatted_lists), footer=footer)
     loop = urwid.MainLoop(frame, PALETTE,
                           handle_mouse=False,
                           unhandled_input=on_unhandled_input)
     watcher.start()
-    loop.event_loop.enter_idle(functools.partial(on_idle, loop, zuul_table))
+    loop.event_loop.enter_idle(functools.partial(on_idle, loop, raw_lists))
     loop.run()
 
 
