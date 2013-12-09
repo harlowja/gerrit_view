@@ -227,6 +227,15 @@ class ZuulPipeline(urwid.Pile):
             self.contents.append((h, DEF_PILE))
         self.name = name
 
+    @property
+    def reviews(self):
+        count = 0
+        for item in self.contents:
+            item = item[0]
+            if isinstance(item, ZuulReview):
+                count += 1
+        return count
+
     def refresh(self, review):
         if not review or not review.get("id"):
             return
@@ -265,7 +274,7 @@ class ZuulPipeline(urwid.Pile):
 
 
 class ZuulList(urwid.ListBox):
-    def __init__(self, source, selector, footers, owner):
+    def __init__(self, source, selector, footers, owner, neighbors):
         super(ZuulList, self).__init__(urwid.SimpleFocusListWalker([]))
         self.source = source
         self.selector = selector
@@ -277,6 +286,7 @@ class ZuulList(urwid.ListBox):
             self.left_footer = None
             self.right_footer = None
         self.owner = owner
+        self.neighbors = neighbors
         self.last_refreshed = None
 
     def _find_pipeline(self, name):
@@ -285,6 +295,14 @@ class ZuulList(urwid.ListBox):
                 if b.name == name:
                     return b
         return None
+
+    @property
+    def reviews(self):
+        count = 0
+        for b in self.body:
+            if isinstance(b, ZuulPipeline):
+                count += b.reviews
+        return count
 
     def _remove_pipeline(self, name):
         for (i, b) in enumerate(self.body):
@@ -305,7 +323,6 @@ class ZuulList(urwid.ListBox):
                     pipeline.refresh(item)
                     review_ids.add(item['id'])
         pipeline.prune(review_ids)
-        return len(review_ids)
 
     def refresh(self):
         zuul_data = dict(self.source.data)
@@ -345,8 +362,9 @@ class ZuulList(urwid.ListBox):
                     self._update_pipeline(pipeline, p)
             self.last_refreshed = zuul_data['__fetched_when']
             if self.owner:
-                self.right_footer.set_text("%s pipelines" %
-                                           (len(all_pipeline_names)))
+                reviews = sum([n.reviews for n in self.neighbors])
+                self.right_footer.set_text("%s pipelines (%sr)" %
+                                           (len(all_pipeline_names), reviews))
         if self.owner:
             if not zuul_data:
                 self.source.event.set()
@@ -423,8 +441,8 @@ def main():
     formatted_lists = []
     for i in range(0, SCREENS):
         z = ZuulList(watcher,
-                     make_selector(buckets[i], allowed_pipelines),
-                     footers, owner=bool(i == 0))
+                     make_selector(buckets[i], allowed_pipelines), footers,
+                     owner=bool(i == 0), neighbors=raw_lists)
         raw_lists.append(z)
         formatted_lists.append(urwid.LineBox(urwid.AttrWrap(z, 'body')))
 
