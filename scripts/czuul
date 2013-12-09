@@ -324,6 +324,16 @@ class ZuulList(urwid.ListBox):
                     review_ids.add(item['id'])
         pipeline.prune(review_ids)
 
+    def seconds_left(self, fetched_when):
+        now = datetime.now()
+        next_fetch = fetched_when + timedelta(seconds=ZUUL_FREQ)
+        much_longer = next_fetch - now
+        if much_longer.seconds <= 0:
+            return 0
+        if next_fetch <= now:
+            return 0
+        return much_longer.seconds
+
     def refresh(self):
         zuul_data = dict(self.source.data)
         pipes = {}
@@ -370,16 +380,17 @@ class ZuulList(urwid.ListBox):
                 self.source.event.set()
             else:
                 fetched_when = zuul_data['__fetched_when']
-                now = datetime.now()
-                expected_fetch = fetched_when + timedelta(seconds=ZUUL_FREQ)
-                much_longer = expected_fetch - now
-                if (expected_fetch <= now) or (much_longer.seconds <= 0):
+                much_longer_secs = self.seconds_left(fetched_when)
+                last_fetch_secs_ago = (datetime.now() - fetched_when).seconds
+                if much_longer_secs <= 0:
                     self.source.event.set()
-                    self.left_footer.set_text("Refresh expected anytime "
-                                              "now...")
+                    base_text = "Data expected anytime now"
                 else:
-                    self.left_footer.set_text("Refresh in %s seconds..."
-                                              % (much_longer.seconds))
+                    base_text = "Data expected in %s seconds"
+                    base_text = base_text % (much_longer_secs)
+                extra_text = "last retrieval was %s seconds ago..."
+                text = base_text + ", " + extra_text
+                self.left_footer.set_text(text % (last_fetch_secs_ago))
 
 
 def refresh_zuul(loop, zuul_tables):
