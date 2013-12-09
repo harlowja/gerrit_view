@@ -123,6 +123,7 @@ class ZuulWatcher(threading.Thread):
         self.daemon = True
         self.data = {}
         self.event = threading.Event()
+        self._fetches = 0
 
     def run(self):
         while True:
@@ -130,6 +131,7 @@ class ZuulWatcher(threading.Thread):
             response = None
             try:
                 response = requests.get(self.url, timeout=ZUUL_TIMEOUT)
+                self._fetches += 1
             except requests.RequestException:
                 LOG.exception("Failed fetching zuul data from %s", self.url)
             if response:
@@ -138,6 +140,7 @@ class ZuulWatcher(threading.Thread):
                     if isinstance(data, (dict)):
                         self.data = dict(data)
                         self.data['__fetched_when'] = datetime.now()
+                        self.data['__fetch_id'] = self._fetches
                     else:
                         raise TypeError("Expected dict type, got '%s'"
                                         % type(data))
@@ -346,13 +349,13 @@ class ZuulList(urwid.ListBox):
             if self.last_refreshed < fetched_when:
                 should_refresh = True
         if should_refresh:
-            all_pipeline_names = []
+            all_pipeline_names = set()
             for p in zuul_data.get('pipelines', []):
                 if not p.get("name"):
                     continue
                 pipe_name = p['name']
                 if len(pipe_name):
-                    all_pipeline_names.append(pipe_name)
+                    all_pipeline_names.add(pipe_name)
                     if not self.selector(pipe_name.lower()):
                         continue
                     pipes[pipe_name] = str(p.get("description", "")).strip()
@@ -374,8 +377,9 @@ class ZuulList(urwid.ListBox):
             self.last_refreshed = zuul_data['__fetched_when']
             if self.owner:
                 reviews = sum([n.reviews for n in self.neighbors])
-                self.right_footer.set_text("%s pipelines (%sr)" %
-                                           (len(all_pipeline_names), reviews))
+                self.right_footer.set_text("%s pipelines (%sr: %s)" %
+                                           (len(all_pipeline_names),
+                                            reviews, zuul_data['__fetch_id']))
         if self.owner:
             if not zuul_data:
                 self.source.event.set()
