@@ -366,12 +366,6 @@ def refresh_zuul(loop, frame):
     frame.refresh(loop.screen, loop.screen_size)
 
 
-def chunk_it(l, n):
-    # From: http://stackoverflow.com/a/312464
-    for i in xrange(0, len(l), n):
-        yield l[i:i + n]
-
-
 def on_unhandled_input(key):
     if key in ('q', 'Q', 'esc'):
         raise urwid.ExitMainLoop()
