@@ -86,12 +86,12 @@ COLUMN_TRUNCATES = {
 COLUMN_ATTRIBUTES = {
     'Created On': (urwid.WEIGHT, 0.5),
     'Status': (urwid.FIXED, 9),
-    'Username': (urwid.FIXED, 13),
+    'Username': (urwid.WEIGHT, 0.33),
     'Project': (urwid.WEIGHT, 0.5),
     'Topic': (urwid.WEIGHT, 0.33),
     'Url': (urwid.FIXED, 35),
     'Subject': (urwid.WEIGHT, 1.0),
-    'Comment': (urwid.WEIGHT, 0.7),
+    'Comment': (urwid.WEIGHT, 0.60),
 }
 HIGHLIGHT_WORDS = {
     # These words get special colored highlighting.
@@ -324,8 +324,8 @@ class ToggleText(urwid.Text):
         text, attr = self.get_text()
         if focus:
             text = u'•' + (text)
-
-        trans = self.get_line_translation(maxcol, (text, attr))
+        self._invalidate()
+        trans = self.get_line_translation(maxcol, ta=(text, attr))
         return widget.apply_text_layout(text, attr, trans, maxcol)
 
     def keypress(self, size, key):
@@ -334,10 +334,19 @@ class ToggleText(urwid.Text):
     def selectable(self):
         return True
 
+    def rows(self, size, focus=False):
+        (maxcol,) = size
+        text, attr = self.get_text()
+        if focus:
+            text = u'•' + (text)
+        self._invalidate()
+        return len(self.get_line_translation(maxcol, ta=(text, attr)))
+
     def pack(self, size=None, focus=False):
         text, attr = self.get_text()
         if focus:
             text = u'•' + (text)
+        self._invalidate()
 
         # Be nice if there was a way to avoid having to copy this code from
         # the parent class....
@@ -345,7 +354,7 @@ class ToggleText(urwid.Text):
             (maxcol,) = size
             if not hasattr(self.layout, "pack"):
                 return size
-            trans = self.get_line_translation(maxcol, (text, attr))
+            trans = self.get_line_translation(maxcol, ta=(text, attr))
             cols = self.layout.pack(maxcol, trans)
             return (cols, len(trans))
 
@@ -577,7 +586,8 @@ class ReviewTable(urwid.ListBox):
         patch_set = event['patchSet']
         uploader = event['uploader']
         row = [
-            ToggleText(_get_text('username', uploader)),
+            ToggleText(_get_text('username', uploader),
+                       wrap='space', align='left'),
             _get_text('topic', change),
             _get_text('url', change),
             _get_text('project', change),
