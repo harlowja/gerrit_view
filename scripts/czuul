@@ -406,8 +406,8 @@ class ZuulFrame(urwid.Frame):
 
         # Update right footer text
         fetch_id = zuul_data['__fetch_id']
-        text = "%s pipelines (%sr: %s)" % (len(cleaned_pipes), len(reviews),
-                                           fetch_id)
+        text = "%s pipelines (%sr: %s fetches)" % (len(cleaned_pipes),
+                                                   len(reviews), fetch_id)
         self.right_footer.set_text(text)
 
     def refresh(self, screen, screen_size):
