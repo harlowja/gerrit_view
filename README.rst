@@ -64,6 +64,13 @@ urwid_ and the curses_ library):
       -i COUNT, --items=COUNT
                             how many items to keep visible [default: 50]
 
+##############
+Keys supported
+##############
+
+* (S, s) - Change sort mode (default none)
+* (q, Q, esc) - Quit                      
+
 czuul
 ------------
 
@@ -87,6 +94,15 @@ urwid_, curses_ library and the requests_ library):
                             split screen count [default: 3]
       -p PIPELINE, --pipeline=PIPELINE
                             only show given pipelines reviews
+
+##############
+Keys supported
+##############
+
+* (R, r) - Force refresh
+* (q, Q, esc) - Quit
+
+
 
 .. _urwid: http://excess.org/urwid/
 .. _curses: http://docs.python.org/2.7/library/curses.html
