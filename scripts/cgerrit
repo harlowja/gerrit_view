@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 # -*- coding: utf-8 -*-
 
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
@@ -36,6 +35,7 @@ from datetime import datetime
 from gerritlib import gerrit
 import six
 import urwid
+from urwid import widget
 
 logging.basicConfig(level=logging.ERROR,
                     format='%(asctime)s %(levelname)s: %(message)s',
@@ -314,6 +314,53 @@ def _get_change_status(event):
     return change_type
 
 
+class ToggleText(urwid.Text):
+    ignore_focus = False
+
+    def render(self, size, focus=False):
+        # Be nice if there was a way to avoid having to copy this code from
+        # the parent class....
+        (maxcol,) = size
+        text, attr = self.get_text()
+        if focus:
+            text = "*%s" % (text)
+        trans = self.get_line_translation(maxcol, (text, attr))
+        return widget.apply_text_layout(text, attr, trans, maxcol)
+
+    def keypress(self, size, key):
+        return key
+
+    def selectable(self):
+        return True
+
+    def pack(self, size=None, focus=False):
+        text, attr = self.get_text()
+        if focus:
+            text = "*%s" % (text)
+
+        # Be nice if there was a way to avoid having to copy this code from
+        # the parent class....
+        if size is not None:
+            (maxcol,) = size
+            if not hasattr(self.layout, "pack"):
+                return size
+            trans = self.get_line_translation(maxcol, (text, attr))
+            cols = self.layout.pack(maxcol, trans)
+            return (cols, len(trans))
+
+        i = 0
+        cols = 0
+        while i < len(text):
+            j = text.find('\n', i)
+            if j == -1:
+                j = len(text)
+            c = urwid.calc_width(text, i, j)
+            if c > cols:
+                cols = c
+            i = j + 1
+        return (cols, text.count('\n') + 1)
+
+
 class ReviewDate(urwid.Text):
     def __init__(self, when=None):
         super(ReviewDate, self).__init__('')
@@ -412,7 +459,7 @@ class ReviewTable(urwid.ListBox):
                 table_header.append(tuple(col_attrs))
             self._header = table_header
         cols = urwid.Columns(self._header, dividechars=1)
-        sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
+        sep = urwid.AttrWrap(urwid.Divider(u'─'), 'body')
         return urwid.Pile([urwid.AttrWrap(cols, 'body'), sep])
 
     @property
@@ -435,7 +482,7 @@ class ReviewTable(urwid.ListBox):
 
     @property
     def footer(self):
-        sep = urwid.AttrWrap(urwid.Divider('-'), 'body')
+        sep = urwid.AttrWrap(urwid.Divider(u'─'), 'body')
         footer_pieces = [
             self.left_footer,
             self.center_footer,
@@ -529,7 +576,7 @@ class ReviewTable(urwid.ListBox):
         patch_set = event['patchSet']
         uploader = event['uploader']
         row = [
-            _get_text('username', uploader),
+            ToggleText(_get_text('username', uploader)),
             _get_text('topic', change),
             _get_text('url', change),
             _get_text('project', change),
@@ -545,7 +592,7 @@ class ReviewTable(urwid.ListBox):
                 col_attrs = list(self._column_attributes[col_name])
             except (KeyError, TypeError):
                 col_attrs = []
-            if not isinstance(v, urwid.Text):
+            if isinstance(v, (str, basestring)):
                 col_attrs.append(_format_text(v))
             else:
                 col_attrs.append(v)
