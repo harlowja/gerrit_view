@@ -323,7 +323,8 @@ class ToggleText(urwid.Text):
         (maxcol,) = size
         text, attr = self.get_text()
         if focus:
-            text = "*%s" % (text)
+            text = u'•' + (text)
+
         trans = self.get_line_translation(maxcol, (text, attr))
         return widget.apply_text_layout(text, attr, trans, maxcol)
 
@@ -336,7 +337,7 @@ class ToggleText(urwid.Text):
     def pack(self, size=None, focus=False):
         text, attr = self.get_text()
         if focus:
-            text = "*%s" % (text)
+            text = u'•' + (text)
 
         # Be nice if there was a way to avoid having to copy this code from
         # the parent class....
@@ -592,7 +593,7 @@ class ReviewTable(urwid.ListBox):
                 col_attrs = list(self._column_attributes[col_name])
             except (KeyError, TypeError):
                 col_attrs = []
-            if isinstance(v, (str, basestring)):
+            if isinstance(v, six.string_types):
                 col_attrs.append(_format_text(v))
             else:
                 col_attrs.append(v)
