@@ -269,10 +269,16 @@ class CyclingColumns(urwid.Columns):
         widths = self.column_widths(size)
         if self.focus_position >= len(widths):
             return key
+        i = self.focus_position
+        mc = widths[i]
+        w, (t, n, b) = self.contents[i]
+        if len(size) == 1 and b:
+            key = w.keypress((mc, self.rows(size, True)), key)
+        else:
+            key = w.keypress((mc,) + size[1:], key)
         m_key = self._command_map[key]
         if m_key not in ('cursor left', 'cursor right'):
             return key
-        i = self.focus_position
         candidates = []
         if m_key == 'cursor right':
             candidates.extend(range(i + 1, len(self.contents)))
