@@ -83,6 +83,8 @@ urwid_, curses_ library and the requests_ library):
       -h, --help            show this help message and exit
       -s URL, --server=URL  zuul server [default:
                             http://zuul.openstack.org/status.json]
+      --split-screens=SCREENS
+                            split screen count [default: 3]
       -p PIPELINE, --pipeline=PIPELINE
                             only show given pipelines reviews
 
