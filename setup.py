@@ -28,7 +28,7 @@ def _path(fn):
 
 
 setup(name='gerrit-view',
-      version='0.2.3',
+      version='0.2.4',
       description='Gerrit viewer tools',
       author="Joshua Harlow",
       author_email='harlowja@yahoo-inc.com',
