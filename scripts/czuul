@@ -59,6 +59,8 @@ PALETTE = (
     ('normal', urwid.WHITE, urwid.DARK_GRAY),
     ('complete', urwid.WHITE, urwid.DARK_BLUE),
     ('smooth', urwid.WHITE, urwid.LIGHT_BLUE),
+    # Column usage
+    ('selected', urwid.DARK_GRAY, urwid.DEFAULT),
 )
 
 
@@ -258,7 +260,47 @@ class ZuulPipelineHeader(urwid.Pile):
         self.name = name
 
 
+class CyclingColumns(urwid.Columns):
+    def keypress(self, size, key):
+        if key is None:
+            return
+        if self.focus_position is None:
+            return key
+        widths = self.column_widths(size)
+        if self.focus_position >= len(widths):
+            return key
+        m_key = self._command_map[key]
+        if m_key not in ('cursor left', 'cursor right'):
+            return key
+        i = self.focus_position
+        candidates = []
+        if m_key == 'cursor right':
+            candidates.extend(range(i + 1, len(self.contents)))
+            for j in range(0, i):
+                candidates.append(j)
+        else:
+            for j in reversed(list(range(0, i))):
+                candidates.append(j)
+            candidates.extend(reversed(list(range(i + 1, len(self.contents)))))
+        for j in candidates:
+            if not self.contents[j][0].selectable():
+                continue
+            self.focus_position = j
+            return None
+        return key
+
+
 class ZuulFrame(urwid.Frame):
+    @staticmethod
+    def _make_columns(columns):
+        cols = []
+        for w in columns:
+            b = urwid.ListBox(urwid.SimpleFocusListWalker([w]))
+            b = urwid.AttrWrap(b, 'body')
+            b = urwid.AttrMap(urwid.LineBox(b), 'selected', 'body')
+            cols.append(b)
+        return CyclingColumns(cols)
+
     def __init__(self, options, source):
         self.options = options
         self.source = source
@@ -272,14 +314,16 @@ class ZuulFrame(urwid.Frame):
         self.left_footer = urwid.Text("Initializing...", align='left')
         footer = urwid.AttrWrap(
             urwid.Columns((self.left_footer, self.right_footer)), 'body')
-        column_owner = urwid.Columns([
-            urwid.LineBox(
-                urwid.AttrWrap(urwid.ListBox(
-                    urwid.SimpleFocusListWalker([c])), 'body'))
-            for c in self.columns])
         self.last_fetched = None
         self.last_fetch_id = None
-        super(ZuulFrame, self).__init__(column_owner, footer=footer)
+        super(ZuulFrame, self).__init__(self._make_columns(self.columns),
+                                        footer=footer)
+
+    def keypress(self, size, key):
+        if key in ('r', 'R'):
+            self.source.event.set()
+            return None
+        return super(ZuulFrame, self).keypress(size, key)
 
     def _refresh_pipelines(self, zuul_data, screen_size):
         maxcol, maxrow = screen_size
@@ -288,8 +332,6 @@ class ZuulFrame(urwid.Frame):
         ok_pipelines = set([p.lower() for p in self.options.pipelines])
         pipes = {}
         for p in zuul_data.get('pipelines', []):
-            if not isinstance(p, dict):
-                continue
             pipe_name = str(p.get('name', ''))
             if not len(pipe_name):
                 continue
