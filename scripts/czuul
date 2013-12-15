@@ -73,41 +73,44 @@ def select_time_attr(secs):
     return 'superslow'
 
 
-def seconds_left(fetched_when, expires_in_secs):
+def seconds_left(expiry_date, expires_in_secs):
     now = datetime.now()
-    next_fetch = fetched_when + timedelta(seconds=expires_in_secs)
-    much_longer = next_fetch - now
-    if much_longer.seconds <= 0:
+    expires_on = expiry_date + timedelta(seconds=max(0, int(expires_in_secs)))
+    much_longer = expires_on - now
+    if much_longer.seconds <= 0 or expires_on <= now:
         return 0
-    if next_fetch <= now:
-        return 0
-    return much_longer.seconds
+    return int(much_longer.seconds)
 
 
-def format_time(millis, secs, mins):
-    if mins <= 0.0:
-        return "%ss/0m" % (secs)
+def format_time(secs, mins, only_mins=False):
+    if only_mins:
+        if mins <= 0.0:
+            return "0m"
+        else:
+            return "%0.1fm" % (mins)
     else:
-        return "%ss/%0.1fm" % (secs, mins)
+        if mins <= 0.0:
+            return "%ss/0m" % (secs)
+        else:
+            return "%ss/%0.1fm" % (secs, mins)
 
 
-def calculate_completion(item):
+def calculate_completion(review):
     jobs_total = 0
     jobs_remaining = 0
-    for j in item.get("jobs", []):
+    for j in review.get("jobs", []):
         jobs_total += 1
         if get_int_key("remaining_time", j) > 0:
             jobs_remaining += 1
-    try:
-        jobs_finished = max(0, jobs_total - jobs_remaining)
-        percent_complete = float(jobs_finished) / jobs_total
-        if percent_complete > 1.0:
-            return 1.0
-        if percent_complete < 0:
-            return 0.0
-        return percent_complete
-    except ZeroDivisionError:
+    if not jobs_total:
         return 1.0
+    jobs_finished = max(0, jobs_total - jobs_remaining)
+    percent_complete = float(jobs_finished) / float(jobs_total)
+    if percent_complete > 1.0:
+        return 1.0
+    if percent_complete < 0:
+        return 0.0
+    return percent_complete
 
 
 def decode_millis(millis):
@@ -170,9 +173,9 @@ class ZuulReview(urwid.Pile):
         if review.get("url"):
             title_pieces.append(("body", " @ %s" % (review['url'])))
         title = urwid.Text(title_pieces)
-        eta = urwid.AttrMap(urwid.Text("ETA", align='right'), 'clear')
+        self.eta_text = urwid.Text([('clear', "ETA")], align='right')
         rows = [
-            urwid.Columns([title, (urwid.FIXED, 6, eta)]),
+            urwid.Columns([title, (urwid.FIXED, 12, self.eta_text)]),
             self.progress_bar,
         ]
         for item in rows:
@@ -180,20 +183,24 @@ class ZuulReview(urwid.Pile):
 
     def refresh(self, review):
         new_jobs = []
+        remaining_millis = []
+        failure_count = 0
         for j in review.get("jobs", []):
             if not j.get("name"):
                 continue
             j_name = j['name']
             j_name = j_name.strip()
             millis = get_int_key("remaining_time", j)
+            remaining_millis.append(millis)
             (secs, mins) = decode_millis(millis)
             time_add_on = ""
             if j.get("result") == 'FAILURE' and j.get("voting"):
                 time_attr = 'dead'
                 time_add_on = "!"
+                failure_count += 1
             else:
                 time_attr = select_time_attr(secs)
-            time_txt = format_time(millis, secs, mins) + time_add_on
+            time_txt = format_time(secs, mins) + time_add_on
             if j_name in self.jobs:
                 (name, remaining) = self.jobs[j_name]
                 remaining_txt = remaining.original_widget
@@ -214,11 +221,28 @@ class ZuulReview(urwid.Pile):
                 self.contents.append((urwid.Columns(rows), DEF_PILE))
             self.contents.append((p_bar, p_bar_options))
         self.progress_bar.set_completion(calculate_completion(review))
+        if remaining_millis:
+            max_remaining_millis = max(remaining_millis)
+        else:
+            max_remaining_millis = 0
+        (secs, mins) = decode_millis(max_remaining_millis)
+        time_txt = format_time(secs, mins, only_mins=True)
+        time_markup = [
+            ('clear', "ETA ["),
+            ('clear', "]"),
+        ]
+        if failure_count:
+            time_attr = 'dead'
+            time_txt += "!"
+        else:
+            time_attr = select_time_attr(secs)
+        time_markup.insert(1, (time_attr, time_txt))
+        self.eta_text.set_text(time_markup)
 
 
-class ZuulPipeline(urwid.Pile):
+class ZuulPipelineHeader(urwid.Pile):
     def __init__(self, name, description=''):
-        super(ZuulPipeline, self).__init__([])
+        super(ZuulPipelineHeader, self).__init__([])
         self.name = str(name)
         title_pieces = [('clear', self.name.title())]
         if description:
@@ -239,8 +263,11 @@ class ZuulFrame(urwid.Frame):
         self.options = options
         self.source = source
         self.columns = []
-        for _i in range(0, SCREENS):
+        screen_count = options.screens
+        assert screen_count > 0, "One or more split-screens must be provided!"
+        for _i in range(0, screen_count):
             self.columns.append(urwid.Pile([]))
+        self.screen_count = screen_count
         self.right_footer = urwid.Text('', align='right')
         self.left_footer = urwid.Text("Initializing...", align='left')
         footer = urwid.AttrWrap(
@@ -254,18 +281,10 @@ class ZuulFrame(urwid.Frame):
         self.last_fetch_id = None
         super(ZuulFrame, self).__init__(column_owner, footer=footer)
 
-    def refresh(self, screen, screen_size):
-        if screen_size is None or not all(screen_size):
-            return
-
-        zuul_data = dict(self.source.data)
-        if not zuul_data:
-            self.source.event.set()
-            self.left_footer.set_text("Waiting for initial data...")
-            return
-
+    def _refresh_pipelines(self, zuul_data, screen_size):
         maxcol, maxrow = screen_size
-        maxcol = maxcol / SCREENS
+        maxcol = maxcol / self.screen_count
+
         ok_pipelines = set([p.lower() for p in self.options.pipelines])
         pipes = {}
         for p in zuul_data.get('pipelines', []):
@@ -277,11 +296,6 @@ class ZuulFrame(urwid.Frame):
             if len(ok_pipelines) and pipe_name not in ok_pipelines:
                 continue
             pipes[pipe_name] = str(p.get("description", "")).strip()
-
-        def poke(fetched_when):
-            much_longer_secs = seconds_left(fetched_when, ZUUL_FREQ)
-            if much_longer_secs <= 0:
-                self.source.event.set()
 
         def is_over_size(c, item_rows=0):
             if len(c.contents) == 0:
@@ -320,41 +334,57 @@ class ZuulFrame(urwid.Frame):
                 place_where = self.columns[-1]
             place_where.contents.append((w, (urwid.PACK, None)))
 
+        reviews = {}
+        cleaned_pipes = {}
+        ordered_pipes = sorted(pipes.keys())
+        for name in ordered_pipes:
+            cleaned_pipes[name] = {
+                'pipeline': ZuulPipelineHeader(name, pipes[name]),
+                'reviews': [],
+            }
+            for p in zuul_data.get('pipelines', []):
+                if p.get('name') == name:
+                    for r in iter_pipeline(p):
+                        reviews[r.review_id] = r
+                        cleaned_pipes[name]['reviews'].append(r.review_id)
+
+        clear_columns()
+        for name in ordered_pipes:
+            pipeline = cleaned_pipes[name]['pipeline']
+            p_reviews = cleaned_pipes[name]['reviews']
+            place_widget(pipeline)
+            for review_id in p_reviews:
+                place_widget(reviews[review_id])
+
+        # Update right footer text
+        fetch_id = zuul_data['__fetch_id']
+        text = "%s pipelines (%sr: %s)" % (len(cleaned_pipes), len(reviews),
+                                           fetch_id)
+        self.right_footer.set_text(text)
+
+    def refresh(self, screen, screen_size):
+        if screen_size is None or not all(screen_size):
+            return
+
+        zuul_data = dict(self.source.data)
+        if not zuul_data:
+            self.source.event.set()
+            self.left_footer.set_text("Waiting for initial data...")
+            return
+
+        def poke(fetched_when):
+            much_longer_secs = seconds_left(fetched_when, ZUUL_FREQ)
+            if much_longer_secs <= 0:
+                self.source.event.set()
+
         fetched_when = zuul_data['__fetched_when']
         fetch_id = zuul_data['__fetch_id']
         poke(fetched_when)
 
         if self.last_fetch_id != fetch_id:
+            self._refresh_pipelines(zuul_data, screen_size)
             self.last_fetched = fetched_when
             self.last_fetch_id = fetch_id
-
-            reviews = {}
-            cleaned_pipes = {}
-            ordered_pipes = sorted(pipes.keys())
-            for name in ordered_pipes:
-                cleaned_pipes[name] = {
-                    'pipeline': ZuulPipeline(name, pipes[name]),
-                    'reviews': [],
-                }
-                for p in zuul_data.get('pipelines', []):
-                    if p.get('name') == name:
-                        for r in iter_pipeline(p):
-                            reviews[r.review_id] = r
-                            cleaned_pipes[name]['reviews'].append(r.review_id)
-
-            clear_columns()
-            for name in ordered_pipes:
-                pipeline = cleaned_pipes[name]['pipeline']
-                p_reviews = cleaned_pipes[name]['reviews']
-                place_widget(pipeline)
-                for review_id in p_reviews:
-                    place_widget(reviews[review_id])
-
-            # Update right footer text
-            text = "%s pipelines (%sr: %s)" % (len(cleaned_pipes),
-                                               len(reviews),
-                                               fetch_id)
-            self.right_footer.set_text(text)
 
         # Update left footer text
         much_longer_secs = seconds_left(self.last_fetched, ZUUL_FREQ)
@@ -380,6 +410,9 @@ def main():
     parser.add_option("-s", "--server", dest="server", action='store',
                       help="zuul server [default: %default]",
                       metavar="URL", default=ZUUL_URL)
+    parser.add_option("--split-screens", dest="screens", action='store',
+                      help="split screen count [default: %default]",
+                      type=int, metavar="SCREENS", default=SCREENS)
     parser.add_option("-p", "--pipeline", dest="pipelines", action='append',
                       help="only show given pipelines reviews",
                       metavar="PIPELINE", default=[])
