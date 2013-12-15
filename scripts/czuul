@@ -73,9 +73,9 @@ def select_time_attr(secs):
     return 'superslow'
 
 
-def seconds_left(fetched_when):
+def seconds_left(fetched_when, expires_in_secs):
     now = datetime.now()
-    next_fetch = fetched_when + timedelta(seconds=ZUUL_FREQ)
+    next_fetch = fetched_when + timedelta(seconds=expires_in_secs)
     much_longer = next_fetch - now
     if much_longer.seconds <= 0:
         return 0
@@ -279,7 +279,7 @@ class ZuulFrame(urwid.Frame):
             pipes[pipe_name] = str(p.get("description", "")).strip()
 
         def poke(fetched_when):
-            much_longer_secs = seconds_left(fetched_when)
+            much_longer_secs = seconds_left(fetched_when, ZUUL_FREQ)
             if much_longer_secs <= 0:
                 self.source.event.set()
 
@@ -318,7 +318,7 @@ class ZuulFrame(urwid.Frame):
                     break
             if place_where is None:
                 place_where = self.columns[-1]
-            place_where.contents.append((w, ("pack", None)))
+            place_where.contents.append((w, (urwid.PACK, None)))
 
         fetched_when = zuul_data['__fetched_when']
         fetch_id = zuul_data['__fetch_id']
@@ -357,7 +357,7 @@ class ZuulFrame(urwid.Frame):
             self.right_footer.set_text(text)
 
         # Update left footer text
-        much_longer_secs = seconds_left(self.last_fetched)
+        much_longer_secs = seconds_left(self.last_fetched, ZUUL_FREQ)
         text = "Refresh expected in %s seconds..." % (much_longer_secs)
         self.left_footer.set_text(text)
 
@@ -377,8 +377,8 @@ def on_unhandled_input(key):
         raise urwid.ExitMainLoop()
 
 
-def on_idle(loop, zuul_tables):
-    loop.set_alarm_in(ALARM_FREQ, refresh_zuul, user_data=zuul_tables)
+def on_idle(loop, frame):
+    loop.set_alarm_in(ALARM_FREQ, refresh_zuul, user_data=frame)
 
 
 def main():
