@@ -277,16 +277,17 @@ class GerritWatcher(threading.Thread):
             self._consume()
 
 
-def _consume_queue(queue):
-    # TODO(harlowja): consume many at once instead of just one?
+def _consume_queue(queue, allotted_secs=0.005):
     events = []
-    ev = None
-    try:
-        ev = queue.get(block=False)
-    except Queue.Empty:
-        pass
-    if ev is not None:
-        events.append(ev)
+    end_time = time.time() + max(0, allotted_secs)
+    while time.time() <= end_time:
+        try:
+            left_time = end_time - time.time()
+            if left_time <= 0:
+                break
+            events.append(queue.get(block=True, timeout=left_time))
+        except Queue.Empty:
+            pass
     return events
 
 
