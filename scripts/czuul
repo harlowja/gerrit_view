@@ -23,6 +23,7 @@ import optparse
 import sys
 import threading
 
+import inflect
 import requests
 import urwid
 
@@ -43,7 +44,7 @@ SCREENS = 3
 
 ### GUI CONSTANTS
 
-DEF_PILE = ('weight', 1)
+ENGINE = inflect.engine()
 PALETTE = (
     # General gui usage
     ('body', urwid.DEFAULT, urwid.DEFAULT),
@@ -181,7 +182,7 @@ class ZuulReview(urwid.Pile):
             self.progress_bar,
         ]
         for item in rows:
-            self.contents.append((item, DEF_PILE))
+            self.contents.append((item, (urwid.WEIGHT, 1)))
 
     def refresh(self, review):
         new_jobs = []
@@ -190,8 +191,7 @@ class ZuulReview(urwid.Pile):
         for j in review.get("jobs", []):
             if not j.get("name"):
                 continue
-            j_name = j['name']
-            j_name = j_name.strip()
+            j_name = str(j.get('name'))
             millis = get_int_key("remaining_time", j)
             remaining_millis.append(millis)
             (secs, mins) = decode_millis(millis)
@@ -220,7 +220,7 @@ class ZuulReview(urwid.Pile):
             for j_name in sorted(new_jobs):
                 (name_txt, time_txt) = self.jobs[j_name]
                 rows = [name_txt, (urwid.WEIGHT, 0.333, time_txt)]
-                self.contents.append((urwid.Columns(rows), DEF_PILE))
+                self.contents.append((urwid.Columns(rows), (urwid.WEIGHT, 1)))
             self.contents.append((p_bar, p_bar_options))
         self.progress_bar.set_completion(calculate_completion(review))
         if remaining_millis:
@@ -256,11 +256,84 @@ class ZuulPipelineHeader(urwid.Pile):
             urwid.Divider(u'─')
         ]
         for h in rows:
-            self.contents.append((h, DEF_PILE))
+            self.contents.append((h, (urwid.WEIGHT, 1)))
         self.name = name
 
 
 class CyclingColumns(urwid.Columns):
+    def __init__(self, maker, count):
+        super(CyclingColumns, self).__init__([])
+        assert int(count) > 0, 'Column count must be > 0'
+        self.columns = []
+        self.count = int(count)
+        self.maker = maker
+        self.index = 0
+        for _i in range(0, self.count):
+            (c, w) = self.maker()
+            self.contents.append((w, (urwid.WEIGHT, 1, False)))
+            self.columns.append((c, w))
+
+    def clear(self):
+        while len(self.columns) > self.count:
+            self.columns.pop()
+        self.index = 0
+        for (c, w) in self.columns:
+            while len(c.contents):
+                c.contents.pop()
+        j = self.index
+        for i in range(0, self.count):
+            w = self.columns[j][1]
+            self.contents[i] = (w, (urwid.WEIGHT, 1, False))
+            j += 1
+
+    def place(self, w, max_rows, max_cols):
+
+        def is_over_size(c, item_rows=0):
+            if len(c.contents) == 0:
+                return False
+            remaining = max_rows - item_rows
+            for w, (_f, _height) in c.contents:
+                rows = w.rows((max_cols,), c.focus_item == w)
+                remaining -= rows
+            if remaining <= 0:
+                return True
+            return False
+
+        w_rows = w.rows((max_cols,), False)
+        column = None
+        for (c, _w2) in self.columns:
+            if is_over_size(c, w_rows):
+                continue
+            column = c
+            break
+        if column is None:
+            (c, w2) = self.maker()
+            self.columns.append((c, w2))
+            column = c
+        column.contents.append((w, (urwid.PACK, None)))
+
+    def shift_contents_left(self):
+        if (self.index + self.count) == len(self.columns):
+            return False
+        self.index += 1
+        j = self.index
+        for i in range(0, self.count):
+            w = self.columns[j][1]
+            self.contents[i] = (w, (urwid.WEIGHT, 1, False))
+            j += 1
+        return True
+
+    def shift_contents_right(self):
+        if self.index <= 0:
+            return False
+        self.index -= 1
+        j = self.index
+        for i in range(0, self.count):
+            w = self.columns[j][1]
+            self.contents[i] = (w, (urwid.WEIGHT, 1, False))
+            j += 1
+        return True
+
     def keypress(self, size, key):
         if key is None:
             return
@@ -279,15 +352,19 @@ class CyclingColumns(urwid.Columns):
         m_key = self._command_map[key]
         if m_key not in ('cursor left', 'cursor right'):
             return key
+        if i == 0:
+            if m_key == 'cursor left':
+                if self.shift_contents_right():
+                    return None
+        if i + 1 == len(self.contents):
+            if m_key == 'cursor right':
+                if self.shift_contents_left():
+                    return None
         candidates = []
         if m_key == 'cursor right':
             candidates.extend(range(i + 1, len(self.contents)))
-            for j in range(0, i):
-                candidates.append(j)
         else:
-            for j in reversed(list(range(0, i))):
-                candidates.append(j)
-            candidates.extend(reversed(list(range(i + 1, len(self.contents)))))
+            candidates.extend(list(range(0, i)))
         for j in candidates:
             if not self.contents[j][0].selectable():
                 continue
@@ -298,23 +375,22 @@ class CyclingColumns(urwid.Columns):
 
 class ZuulFrame(urwid.Frame):
     @staticmethod
-    def _make_columns(columns):
-        cols = []
-        for w in columns:
-            b = urwid.ListBox(urwid.SimpleFocusListWalker([w]))
-            b = urwid.AttrWrap(b, 'body')
-            b = urwid.AttrMap(urwid.LineBox(b), 'selected', 'body')
-            cols.append(b)
-        return CyclingColumns(cols)
+    def _make_columns(column_count):
+
+        def column_maker():
+            c = urwid.Pile([])
+            w = urwid.ListBox(urwid.SimpleFocusListWalker([c]))
+            w = urwid.AttrWrap(w, 'body')
+            w = urwid.AttrMap(urwid.LineBox(w), 'selected', 'body')
+            return (c, w)
+
+        return CyclingColumns(column_maker, column_count)
 
     def __init__(self, options, source):
         self.options = options
         self.source = source
-        self.columns = []
         screen_count = options.screens
         assert screen_count > 0, "One or more split-screens must be provided!"
-        for _i in range(0, screen_count):
-            self.columns.append(urwid.Pile([]))
         self.screen_count = screen_count
         self.right_footer = urwid.Text('', align='right')
         self.left_footer = urwid.Text("Initializing...", align='left')
@@ -322,8 +398,8 @@ class ZuulFrame(urwid.Frame):
             urwid.Columns((self.left_footer, self.right_footer)), 'body')
         self.last_fetched = None
         self.last_fetch_id = None
-        super(ZuulFrame, self).__init__(self._make_columns(self.columns),
-                                        footer=footer)
+        self.columns = self._make_columns(screen_count)
+        super(ZuulFrame, self).__init__(self.columns, footer=footer)
 
     def keypress(self, size, key):
         if key in ('r', 'R'):
@@ -345,17 +421,6 @@ class ZuulFrame(urwid.Frame):
                 continue
             pipes[pipe_name] = str(p.get("description", "")).strip()
 
-        def is_over_size(c, item_rows=0):
-            if len(c.contents) == 0:
-                return False
-            remaining = maxrow - item_rows
-            for w, (_f, _height) in c.contents:
-                rows = w.rows((maxcol,), c.focus_item == w)
-                remaining -= rows
-            if remaining <= 0:
-                return True
-            return False
-
         def iter_pipeline(data):
             for q in data.get('change_queues', []):
                 for h in q.get('heads', []):
@@ -365,22 +430,6 @@ class ZuulFrame(urwid.Frame):
                         r = ZuulReview(item)
                         r.refresh(item)
                         yield r
-
-        def clear_columns():
-            for c in self.columns:
-                while len(c.contents):
-                    c.contents.pop()
-
-        def place_widget(w):
-            place_where = None
-            for c in self.columns:
-                w_rows = w.rows((maxcol,), c.focus_item == w)
-                if not is_over_size(c, w_rows):
-                    place_where = c
-                    break
-            if place_where is None:
-                place_where = self.columns[-1]
-            place_where.contents.append((w, (urwid.PACK, None)))
 
         reviews = {}
         cleaned_pipes = {}
@@ -396,18 +445,18 @@ class ZuulFrame(urwid.Frame):
                         reviews[r.review_id] = r
                         cleaned_pipes[name]['reviews'].append(r.review_id)
 
-        clear_columns()
+        self.columns.clear()
         for name in ordered_pipes:
             pipeline = cleaned_pipes[name]['pipeline']
-            p_reviews = cleaned_pipes[name]['reviews']
-            place_widget(pipeline)
-            for review_id in p_reviews:
-                place_widget(reviews[review_id])
+            self.columns.place(pipeline, maxrow, maxcol)
+            for review_id in cleaned_pipes[name].get('reviews', []):
+                self.columns.place(reviews[review_id], maxrow, maxcol)
 
         # Update right footer text
         fetch_id = zuul_data['__fetch_id']
-        text = "%s pipelines (%sr: %s fetches)" % (len(cleaned_pipes),
-                                                   len(reviews), fetch_id)
+        text = "%s pipelines (%sr, %sw, %s fetch)"
+        text = text % (len(cleaned_pipes), len(reviews),
+                       len(self.columns.columns), ENGINE.ordinal(fetch_id))
         self.right_footer.set_text(text)
 
     def refresh(self, screen, screen_size):
