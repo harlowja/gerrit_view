@@ -23,7 +23,6 @@ import optparse
 import sys
 import threading
 
-import inflect
 import requests
 import urwid
 
@@ -44,7 +43,6 @@ SCREENS = 3
 
 ### GUI CONSTANTS
 
-ENGINE = inflect.engine()
 PALETTE = (
     # General gui usage
     ('body', urwid.DEFAULT, urwid.DEFAULT),
@@ -364,7 +362,7 @@ class CyclingColumns(urwid.Columns):
         if m_key == 'cursor right':
             candidates.extend(range(i + 1, len(self.contents)))
         else:
-            candidates.extend(list(range(0, i)))
+            candidates.extend(reversed(list(range(0, i))))
         for j in candidates:
             if not self.contents[j][0].selectable():
                 continue
@@ -399,6 +397,7 @@ class ZuulFrame(urwid.Frame):
         self.last_fetched = None
         self.last_fetch_id = None
         self.columns = self._make_columns(screen_count)
+        self.reviews = {}
         super(ZuulFrame, self).__init__(self.columns, footer=footer)
 
     def keypress(self, size, key):
@@ -424,12 +423,14 @@ class ZuulFrame(urwid.Frame):
         def iter_pipeline(data):
             for q in data.get('change_queues', []):
                 for h in q.get('heads', []):
-                    for item in h:
-                        if not item.get("id"):
+                    for raw_data in h:
+                        if not raw_data.get("id"):
                             continue
-                        r = ZuulReview(item)
-                        r.refresh(item)
-                        yield r
+                        try:
+                            r = ZuulReview(raw_data)
+                            yield (r, raw_data)
+                        except (KeyError, TypeError):
+                            pass
 
         reviews = {}
         cleaned_pipes = {}
@@ -441,22 +442,38 @@ class ZuulFrame(urwid.Frame):
             }
             for p in zuul_data.get('pipelines', []):
                 if p.get('name') == name:
-                    for r in iter_pipeline(p):
-                        reviews[r.review_id] = r
-                        cleaned_pipes[name]['reviews'].append(r.review_id)
+                    for (r, raw_data) in iter_pipeline(p):
+                        if r.review_id in self.reviews:
+                            r = self.reviews[r.review_id]
+                        try:
+                            r.refresh(raw_data)
+                            reviews[r.review_id] = r
+                            cleaned_pipes[name]['reviews'].append(r.review_id)
+                        except (KeyError, TypeError):
+                            pass
 
+        def cmp_reviews(r1, r2):
+            try:
+                r1_i = int(r1.split(",", 1)[0])
+                r2_i = int(r2.split(",", 1)[0])
+                return cmp(r1_i, r2_i)
+            except (ValueError, TypeError):
+                return cmp(r1, r2)
+
+        self.reviews = reviews
         self.columns.clear()
         for name in ordered_pipes:
             pipeline = cleaned_pipes[name]['pipeline']
             self.columns.place(pipeline, maxrow, maxcol)
-            for review_id in cleaned_pipes[name].get('reviews', []):
+            ids = sorted(cleaned_pipes[name]['reviews'], cmp=cmp_reviews)
+            for review_id in reversed(ids):
                 self.columns.place(reviews[review_id], maxrow, maxcol)
 
         # Update right footer text
         fetch_id = zuul_data['__fetch_id']
-        text = "%s pipelines (%sr, %sw, %s fetch)"
+        text = "%s pipelines (%sr, %sw, %sf)"
         text = text % (len(cleaned_pipes), len(reviews),
-                       len(self.columns.columns), ENGINE.ordinal(fetch_id))
+                       len(self.columns.columns), fetch_id)
         self.right_footer.set_text(text)
 
     def refresh(self, screen, screen_size):

@@ -45,7 +45,6 @@ setup(name='gerrit-view',
           'requests',
           'six',
           'urwid',
-          'inflect',
       ],
       classifiers=[
         "Development Status :: 4 - Beta",
