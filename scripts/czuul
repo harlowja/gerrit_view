@@ -270,6 +270,8 @@ class CyclingColumns(urwid.Columns):
             (c, w) = self.maker()
             self.contents.append((w, (urwid.WEIGHT, 1, False)))
             self.columns.append((c, w))
+        self.right_arrow = urwid.SolidFill(u"⇢")
+        self.right_arrow_on = False
 
     def clear(self):
         while len(self.columns) > self.count:
@@ -278,11 +280,11 @@ class CyclingColumns(urwid.Columns):
         for (c, w) in self.columns:
             while len(c.contents):
                 c.contents.pop()
-        j = self.index
+        self._clear_contents()
+        self.right_arrow_on = False
         for i in range(0, self.count):
-            w = self.columns[j][1]
-            self.contents[i] = (w, (urwid.WEIGHT, 1, False))
-            j += 1
+            w = self.columns[i][1]
+            self.contents.append((w, (urwid.WEIGHT, 1, False)))
 
     def place(self, w, max_rows, max_cols):
 
@@ -310,15 +312,28 @@ class CyclingColumns(urwid.Columns):
             column = c
         column.contents.append((w, (urwid.PACK, None)))
 
+        if len(self.columns) > len(self.contents) and not self.right_arrow_on:
+            self.right_arrow_on = True
+            self.contents.append((self.right_arrow, (urwid.GIVEN, 1, False)))
+
+    def _clear_contents(self):
+        while len(self.contents):
+            self.contents.pop()
+
     def shift_contents_left(self):
         if (self.index + self.count) == len(self.columns):
             return False
         self.index += 1
         j = self.index
-        for i in range(0, self.count):
+        self._clear_contents()
+        for _i in range(0, self.count):
             w = self.columns[j][1]
-            self.contents[i] = (w, (urwid.WEIGHT, 1, False))
+            self.contents.append((w, (urwid.WEIGHT, 1, False)))
             j += 1
+        if j == len(self.columns):
+            self.right_arrow_on = False
+        if self.right_arrow_on:
+            self.contents.append((self.right_arrow, (urwid.GIVEN, 1, False)))
         return True
 
     def shift_contents_right(self):
@@ -326,10 +341,15 @@ class CyclingColumns(urwid.Columns):
             return False
         self.index -= 1
         j = self.index
-        for i in range(0, self.count):
+        self._clear_contents()
+        for _i in range(0, self.count):
             w = self.columns[j][1]
-            self.contents[i] = (w, (urwid.WEIGHT, 1, False))
+            self.contents.append((w, (urwid.WEIGHT, 1, False)))
             j += 1
+        if self.index > 0:
+            self.right_arrow_on = True
+        if self.right_arrow_on:
+            self.contents.append((self.right_arrow, (urwid.GIVEN, 1, False)))
         return True
 
     def keypress(self, size, key):
@@ -354,7 +374,10 @@ class CyclingColumns(urwid.Columns):
             if m_key == 'cursor left':
                 if self.shift_contents_right():
                     return None
-        if i + 1 == len(self.contents):
+        content_len = len(self.contents)
+        if self.right_arrow_on:
+            content_len -= 1
+        if i + 1 == content_len:
             if m_key == 'cursor right':
                 if self.shift_contents_left():
                     return None
