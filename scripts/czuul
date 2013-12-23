@@ -395,7 +395,11 @@ class CyclingColumns(urwid.Columns):
         if k + 1 == content_len:
             if m_key == 'cursor right':
                 if self.shift_contents_left():
-                    self.focus_position += self.count - 1
+                    for m in reversed(list(range(0, len(self.contents)))):
+                        if not self.contents[m][0].selectable():
+                            continue
+                        self.focus_position = m
+                        break
                     return None
         candidates = []
         if m_key == 'cursor right':
