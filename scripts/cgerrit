@@ -153,37 +153,6 @@ def _get_date(k, row):
         return None
 
 
-def _do_truncation(filename, max_size):
-    if max_size < 0 or not filename:
-        return
-    if os.path.getsize(filename) < max_size:
-        return
-    # Simple way of reverse truncating normal line-oriented sized files,
-    # will not work for huge files since this reads the files contents into
-    # memory.
-    with open(filename, "w+b") as fh:
-        lines = list(fh.read().splitlines())
-        with tempfile.NamedTemporaryFile() as tmp_fh:
-            # Move the number of lines to create the desired file size (from
-            # the end of the read in file, instead of the front).
-            for line in reversed(lines):
-                if os.path.getsize(tmp_fh.name) >= max_size:
-                    break
-                tmp_fh.write(line)
-                tmp_fh.write("\n")
-                tmp_fh.flush()
-            tmp_fh.seek(0)
-            lines = list(tmp_fh.read().splitlines())
-            fh.seek(0)
-            fh.truncate(0)
-            fh.seek(0)
-            # Now reverse it again to get the right order (begin to end).
-            for line in reversed(lines):
-                fh.write(line)
-                fh.write("\n")
-                fh.flush()
-
-
 def _get_text(k, container):
     if k not in container:
         return ""
@@ -209,9 +178,6 @@ class GerritWatcher(threading.Thread):
         self.prefetch = kwargs.get("prefetch", 0)
         self.has_prefetched = False
         self.record_file = kwargs.get("record")
-        self.max_record_size = int(kwargs.get("record_size"))
-        if self.max_record_size > 0:
-            self.max_record_size = self.max_record_size * (1024 * 1024)
         self.has_read_record = False
 
     def _prefetch_check(self):
@@ -348,12 +314,6 @@ class GerritWatcher(threading.Thread):
                 fh.write("\n")
         except IOError:
             LOG.exception("Failed writing event to %s", self.record_file)
-        try:
-            _do_truncation(self.record_file, self.max_record_size)
-        except IOError as e:
-            if e.errno != errno.ENOENT:
-                LOG.exception("Failed to truncate file %s to %s size",
-                              self.record_file, self.max_record_size)
 
     def _consume(self):
         try:
@@ -765,20 +725,10 @@ def main():
                       help="record file to store past events (also used for "
                            "initial view population if provided)",
                       metavar="FILE",
-                      default=os.path.join(tempfile.gettempdir(),
-                                           "record.bin"))
-    parser.add_option("--record-max-size", dest="record_size", action='store',
-                      type="int",
-                      help="a size in megabytes that can be provided to"
-                           " restrict how big the record file can get"
-                           " [default: %default]",
-                      metavar="SIZE",
-                      default=10)
+                      default=None)
     (options, args) = parser.parse_args()
     if options.back <= 0:
         parser.error("Item count must be greater or equal to one.")
-    if options.record_size == 0:
-        parser.error("Record size must be either -1 or greater than 0.")
     gerrit_config = {
         'keyfile': options.keyfile,
         'port': int(options.port),
@@ -786,7 +736,6 @@ def main():
         'username': options.username,
         'prefetch': max(0, options.prefetch),
         'record': options.record,
-        'record_size': options.record_size,
     }
     event_queue = Queue.Queue()
     gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
