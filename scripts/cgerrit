@@ -18,6 +18,7 @@
 #    under the License.
 
 import collections
+import errno
 import functools
 import getpass
 import json
@@ -50,6 +51,7 @@ GERRIT_HOST = 'review.openstack.org'
 GERRIT_PORT = 29418
 BACKOFF_ATTEMPTS = 5
 VISIBLE_LIST_LEN = 50
+PREFETCH_LEN = VISIBLE_LIST_LEN
 ALARM_FREQ = 1.0
 SANITY_QUERY = 'status:open limit:%s'
 
@@ -152,9 +154,7 @@ def _get_date(k, row):
 
 
 def _do_truncation(filename, max_size):
-    if max_size < 0:
-        return
-    if not filename or not os.path.exists(filename):
+    if max_size < 0 or not filename:
         return
     if os.path.getsize(filename) < max_size:
         return
@@ -164,6 +164,8 @@ def _do_truncation(filename, max_size):
     with open(filename, "w+b") as fh:
         lines = list(fh.read().splitlines())
         with tempfile.NamedTemporaryFile() as tmp_fh:
+            # Move the number of lines to create the desired file size (from
+            # the end of the read in file, instead of the front).
             for line in reversed(lines):
                 if os.path.getsize(tmp_fh.name) >= max_size:
                     break
@@ -175,6 +177,7 @@ def _do_truncation(filename, max_size):
             fh.seek(0)
             fh.truncate(0)
             fh.seek(0)
+            # Now reverse it again to get the right order (begin to end).
             for line in reversed(lines):
                 fh.write(line)
                 fh.write("\n")
@@ -203,19 +206,55 @@ class GerritWatcher(threading.Thread):
         self.username = username
         self.daemon = True
         self.gerrit = None
+        self.prefetch = kwargs.get("prefetch", 0)
+        self.has_prefetched = False
         self.record_file = kwargs.get("record")
         self.max_record_size = int(kwargs.get("record_size"))
         if self.max_record_size > 0:
             self.max_record_size = self.max_record_size * (1024 * 1024)
         self.has_read_record = False
 
-    def _sanity_check(self):
+    def _prefetch_check(self):
         fetch_am = 1
+        if not self.has_prefetched:
+            fetch_am = max(fetch_am, self.prefetch)
+
+        def event_sort(ev1, ev2):
+            p1 = ev1['patchSet']
+            p2 = ev2['patchSet']
+            return cmp(p1['createdOn'], p2['createdOn'])
+
         q = SANITY_QUERY % (fetch_am)
         LOG.info("Using '%s' for sanity query.", q)
-        self.gerrit.bulk_query(q)
+        results = self.gerrit.bulk_query(q)
+        translated = []
+        for r in results:
+            if not isinstance(r, (dict)):
+                continue
+            if r.get('type') == 'stats':
+                continue
+            # Translate it into what looks like a patch-set created
+            # event and then send this via the queue to showup on the gui
+            ev = {
+                'type': 'patchset-created',
+                'uploader': r.pop('owner'),
+                'patchSet': {
+                    'createdOn': r.pop('createdOn'),
+                    'lastUpdated': r.pop('lastUpdated', None),
+                },
+            }
+            ev['change'] = dict(r)
+            translated.append(ev)
 
-    def _connect(self):
+        # For some reason we can get more than requested, even though
+        # we send a limit, huh??
+        LOG.info("Received %s sanity check results.", len(translated))
+        translated = translated[0:fetch_am]
+        self.has_prefetched = True
+        return list(sorted(translated, cmp=event_sort))
+
+    def _connect_and_prefetch(self):
+        prefetched_events = []
         try:
             if self.gerrit is None:
                 self.gerrit = gerrit.Gerrit(self.server, self.username,
@@ -223,11 +262,12 @@ class GerritWatcher(threading.Thread):
             # NOTE(harlowja): only after the sanity query passes do we have
             # some level of confidence that the watcher thread will actually
             # correctly connect.
-            self._sanity_check()
+            prefetched_events = self._prefetch_check()
             self.gerrit.startWatching()
             LOG.info('Start watching gerrit event stream.')
         except Exception:
             LOG.exception('Exception while connecting to gerrit')
+        return prefetched_events
 
     @property
     def connected(self):
@@ -239,11 +279,12 @@ class GerritWatcher(threading.Thread):
             return False
         return True
 
-    def _ensure_connected(self):
+    def _attempt_connect_and_prefetch(self):
         if self.connected:
-            return
+            return []
+        prefetched_events = []
         for i in xrange(0, BACKOFF_ATTEMPTS):
-            self._connect()
+            prefetched_events = self._connect_and_prefetch()
             if not self.connected:
                 sleep_time = 2**i
                 if i + 1 < BACKOFF_ATTEMPTS:
@@ -254,6 +295,7 @@ class GerritWatcher(threading.Thread):
                 break
         if not self.connected:
             LOG.fatal("Could not connect to %s:%s", self.server, self.port)
+        return prefetched_events
 
     def _handle_event(self, event):
         LOG.debug('Placing event on producer queue: %s', event)
@@ -261,7 +303,7 @@ class GerritWatcher(threading.Thread):
 
     def _consume_record(self):
         if self.has_read_record or not self.record_file:
-            return
+            return []
 
         def check_input(data):
             if not isinstance(data, (dict)):
@@ -285,28 +327,33 @@ class GerritWatcher(threading.Thread):
                         events.append(event)
                 except (TypeError, ValueError):
                     pass
-        except IOError:
-            pass
-
-        for event in events:
-            self._handle_event(event)
-        self.has_read_record = True
+            self.has_read_record = True
+        except IOError as e:
+            if e.errno != errno.ENOENT:
+                LOG.exception("Could not read record file at %s",
+                              self.record_file)
+        return events
 
     def _record_event(self, event):
         if not self.record_file:
             return
         try:
             event_f = json.dumps(event)
+        except (ValueError, TypeError):
+            LOG.exception("Failed at formatting event to json")
+            return
+        try:
             with open(self.record_file, "ab") as fh:
                 fh.write(event_f)
                 fh.write("\n")
-        except (IOError, TypeError, ValueError):
-            pass
+        except IOError:
+            LOG.exception("Failed writing event to %s", self.record_file)
         try:
             _do_truncation(self.record_file, self.max_record_size)
-        except IOError:
-            LOG.exception("Failed to truncate file %s to %s size",
-                          self.record_file, self.max_record_size)
+        except IOError as e:
+            if e.errno != errno.ENOENT:
+                LOG.exception("Failed to truncate file %s to %s size",
+                              self.record_file, self.max_record_size)
 
     def _consume(self):
         try:
@@ -321,8 +368,10 @@ class GerritWatcher(threading.Thread):
 
     def run(self):
         while True:
-            self._ensure_connected()
-            self._consume_record()
+            previous_events = self._consume_record()
+            prefetch_events = self._attempt_connect_and_prefetch()
+            for event in previous_events + prefetch_events:
+                self._handle_event(event)
             self._consume()
 
 
@@ -698,6 +747,9 @@ def main():
     parser.add_option("-p", "--port", dest="port", action='store',
                       type="int", help="gerrit port [default: %default]",
                       metavar="PORT", default=GERRIT_PORT)
+    parser.add_option("--prefetch", dest="prefetch", action='store',
+                      type="int", help="prefetch amount [default: %default]",
+                      metavar="COUNT", default=PREFETCH_LEN)
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
                       help="gerrit ssh keyfile [default: %default]",
                       metavar="FILE", default=_get_key_path())
@@ -732,6 +784,7 @@ def main():
         'port': int(options.port),
         'server': options.server,
         'username': options.username,
+        'prefetch': max(0, options.prefetch),
         'record': options.record,
         'record_size': options.record_size,
     }
