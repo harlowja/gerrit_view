@@ -268,8 +268,8 @@ class GerritWatcher(threading.Thread):
         self.queue.put(event)
 
     def _consume_record(self):
-        if self.has_read_record or not self.record_file:
-            return []
+        if not self.record_file:
+            return
 
         def check_input(data):
             if not isinstance(data, (dict)):
@@ -279,26 +279,22 @@ class GerritWatcher(threading.Thread):
                     return False
             return True
 
-        events = []
         try:
             with open(self.record_file, "rb") as fh:
-                lines = fh.read().splitlines()
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                    if check_input(event):
-                        events.append(event)
-                except (TypeError, ValueError):
-                    pass
-            self.has_read_record = True
+                for line in iter(fh):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        if check_input(event):
+                            yield event
+                    except ValueError:
+                        pass
         except IOError as e:
             if e.errno != errno.ENOENT:
                 LOG.exception("Could not read record file at %s",
                               self.record_file)
-        return events
 
     def _record_event(self, event):
         if not self.record_file:
@@ -328,10 +324,14 @@ class GerritWatcher(threading.Thread):
 
     def run(self):
         while True:
-            previous_events = self._consume_record()
             prefetch_events = self._attempt_connect_and_prefetch()
-            for event in previous_events + prefetch_events:
+            if not self.has_read_record:
+                for event in self._consume_record():
+                    self._handle_event(event)
+                self.has_read_record = True
+            for event in prefetch_events:
                 self._handle_event(event)
+                self._record_event(event)
             self._consume()
 
 
