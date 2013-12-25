@@ -37,6 +37,7 @@ from datetime import datetime
 from gerritlib import gerrit
 import six
 import urwid
+from urwid.signals import connect_signal
 from urwid import widget
 
 logging.basicConfig(level=logging.ERROR,
@@ -106,6 +107,7 @@ HIGHLIGHT_WORDS = {
     'failed': 'failed',
     'fails': 'failed',
 }
+COLUMN_2_IDX = dict((k, i) for (i, k) in enumerate(COLUMNS))
 
 ### HELPERS
 
@@ -174,7 +176,7 @@ class GerritWatcher(threading.Thread):
         self.username = username
         self.daemon = True
         self.gerrit = None
-        self.prefetch = kwargs.get("prefetch", 0)
+        self.prefetch = int(kwargs.get("prefetch", 0))
         self.has_prefetched = False
         self.record_file = kwargs.get("record")
         self.has_read_record = False
@@ -441,12 +443,8 @@ class ReviewTable(urwid.ListBox):
     def __init__(self, max_size=1):
         super(ReviewTable, self).__init__(urwid.SimpleListWalker([]))
         assert int(max_size) > 0, "Max size must be > 0"
-        self._columns = tuple(COLUMNS)
-        self._column_attributes = dict(COLUMN_ATTRIBUTES)
         self._max_size = int(max_size)
-        self._header = None
         self._footer_pieces = [None, None, None]
-        self._column_2_idx = dict((k, i) for (i, k) in enumerate(COLUMNS))
         self._sort_by = [
             (None, None),  # no sorting
             ('Created On (Desc)', self._sort_date("Created On", False)),
@@ -462,9 +460,10 @@ class ReviewTable(urwid.ListBox):
         ]
         self._sort_idx = 0
         self._rows = []
+        self.frame = None
 
     def _sort_text(self, col_name, asc):
-        col_idx = self._column_2_idx[col_name]
+        col_idx = COLUMN_2_IDX[col_name]
         flip_map = {
             0: 0,
             -1: 1,
@@ -482,7 +481,7 @@ class ReviewTable(urwid.ListBox):
         return sorter
 
     def _sort_date(self, col_name, asc):
-        col_idx = self._column_2_idx[col_name]
+        col_idx = COLUMN_2_IDX[col_name]
         flip_map = {
             0: 0,
             -1: 1,
@@ -507,28 +506,12 @@ class ReviewTable(urwid.ListBox):
         return sorter
 
     @property
-    def columns(self):
-        return self._columns
+    def entries(self):
+        return len(self.body)
 
     @property
     def max_size(self):
         return self._max_size
-
-    @property
-    def header(self):
-        if self._header is None:
-            table_header = []
-            for col_name in self.columns:
-                try:
-                    col_attrs = list(self._column_attributes[col_name])
-                except (KeyError, TypeError):
-                    col_attrs = []
-                col_attrs.append(_make_text(col_name))
-                table_header.append(tuple(col_attrs))
-            self._header = table_header
-        cols = urwid.Columns(self._header, dividechars=1)
-        sep = urwid.AttrWrap(urwid.Divider(u'─'), 'body')
-        return urwid.Pile([urwid.AttrWrap(cols, 'body'), sep])
 
     @property
     def right_footer(self):
@@ -548,19 +531,8 @@ class ReviewTable(urwid.ListBox):
             self._footer_pieces[1] = urwid.Text('', align='center')
         return self._footer_pieces[1]
 
-    @property
-    def footer(self):
-        sep = urwid.AttrWrap(urwid.Divider(u'─'), 'body')
-        footer_pieces = [
-            self.left_footer,
-            self.center_footer,
-            self.right_footer,
-        ]
-        cols = urwid.Columns(footer_pieces)
-        return urwid.Pile([sep, urwid.AttrWrap(cols, 'body')])
-
     def _add_row(self, row):
-        if len(row.contents) != len(self.columns):
+        if len(row.contents) != len(COLUMNS):
             raise RuntimeError("Attempt to add a row with differing"
                                " column count")
         if len(self._rows) >= self.max_size:
@@ -575,7 +547,7 @@ class ReviewTable(urwid.ListBox):
             self.body.insert(0, row)
 
     def _find_change(self, change):
-        url_i = self._column_2_idx['Url']
+        url_i = COLUMN_2_IDX['Url']
         m_c = None
         for c in self.body:
             url = c.contents[url_i]
@@ -587,7 +559,7 @@ class ReviewTable(urwid.ListBox):
     def _set_status(self, match, text):
         if not text or match is None:
             return None
-        status_i = self._column_2_idx['Status']
+        status_i = COLUMN_2_IDX['Status']
         new_contents = list(match.contents[status_i])
         new_contents[0] = urwid.AttrWrap(_make_text(text), text.lower())
         match.contents[status_i] = tuple(new_contents)
@@ -605,7 +577,7 @@ class ReviewTable(urwid.ListBox):
         if match is not None:
             reason = _get_text('reason', event)
             if len(reason):
-                comment_i = self._column_2_idx['Comment']
+                comment_i = COLUMN_2_IDX['Comment']
                 new_column = list(match.contents[comment_i])
                 new_column[0] = _format_text(reason)
                 match.contents[comment_i] = tuple(new_column)
@@ -617,7 +589,7 @@ class ReviewTable(urwid.ListBox):
         if match is not None:
             comment = _get_text('comment', event)
             if len(comment):
-                comment_i = self._column_2_idx['Comment']
+                comment_i = COLUMN_2_IDX['Comment']
                 new_column = list(match.contents[comment_i])
                 new_column[0] = _format_text(comment)
                 match.contents[comment_i] = tuple(new_column)
@@ -629,7 +601,7 @@ class ReviewTable(urwid.ListBox):
         if match is not None:
             reason = _get_text('reason', event)
             if len(reason):
-                comment_i = self._column_2_idx['Comment']
+                comment_i = COLUMN_2_IDX['Comment']
                 new_column = list(match.contents[comment_i])
                 new_column[0] = _format_text(reason)
                 match.contents[comment_i] = tuple(new_column)
@@ -656,9 +628,9 @@ class ReviewTable(urwid.ListBox):
         ]
         attr_row = []
         for (i, v) in enumerate(row):
-            col_name = self.columns[i]
+            col_name = COLUMNS[i]
             try:
-                col_attrs = list(self._column_attributes[col_name])
+                col_attrs = list(COLUMN_ATTRIBUTES[col_name])
             except (KeyError, TypeError):
                 col_attrs = []
             if isinstance(v, six.string_types):
@@ -676,8 +648,8 @@ class ReviewTable(urwid.ListBox):
         self.body.extend(new_body)
 
     def keypress(self, size, key):
-        handled = super(ReviewTable, self).keypress(size, key)
-        if handled is None:
+        key = super(ReviewTable, self).keypress(size, key)
+        if not key:
             return None
         if key in ('s', 'S'):
             self._sort_idx += 1
@@ -691,6 +663,98 @@ class ReviewTable(urwid.ListBox):
                 self._refill(sorted(self._rows, cmp=sort_functor))
             return None
         return key
+
+
+class SizingFrame(urwid.Frame):
+    def __init__(self, review_table):
+        super(SizingFrame, self).__init__(urwid.AttrWrap(review_table, 'body'))
+        self.review_table = review_table
+        connect_signal(self.review_table.body, 'modified',
+                       self._set_refresh_header_footer)
+        self.refresh_headers = True
+        self.last_size = (-1, -1)
+
+    def _set_refresh_header_footer(self):
+        self.refresh_headers = True
+
+    def _make_header(self, percent_below=None):
+        table_header = []
+        for col_name in COLUMNS:
+            try:
+                col_attrs = list(COLUMN_ATTRIBUTES[col_name])
+            except KeyError:
+                col_attrs = []
+            col_attrs.append(_make_text(col_name))
+            table_header.append(tuple(col_attrs))
+        table_cols = urwid.Columns(table_header, dividechars=1)
+        h_div = urwid.Divider(u'─')
+        if percent_below is not None:
+            comp = urwid.Text(u"⇡%i%%⇡" % (percent_below * 100.0))
+            header_cols = urwid.Columns([
+                h_div,
+                (urwid.FLOW, comp),
+                h_div,
+            ])
+        else:
+            header_cols = urwid.Columns([h_div])
+        return urwid.Pile([table_cols, header_cols])
+
+    def _make_footer(self, percent_above=None):
+        footer_pieces = [
+            self.review_table.left_footer,
+            self.review_table.center_footer,
+            self.review_table.right_footer,
+        ]
+        cols = urwid.Columns(footer_pieces)
+        f_div = urwid.Divider(u'─')
+        if percent_above is not None:
+            comp = urwid.Text(u"⇣%i%%⇣" % (percent_above * 100))
+            footer_cols = urwid.Columns([
+                f_div,
+                (urwid.FLOW, comp),
+                f_div,
+            ])
+        else:
+            footer_cols = urwid.Columns([f_div])
+        return urwid.Pile([footer_cols, cols])
+
+    def _reset_footer_header(self, size):
+        item_count = self.review_table.entries
+        if item_count == 0:
+            self.header = self._make_header()
+            self.footer = self._make_footer()
+            return
+        middle, top, bottom = self.review_table.calculate_visible(size, False)
+        row_offset, focus_widget, focus_pos, focus_rows, cursor = middle
+        items_above_visible = len(top[1])
+        items_below_visible = len(bottom[1])
+        items_visible = 1 + items_below_visible + items_above_visible
+        initial_focus_pos = focus_pos - items_above_visible
+        items_above = initial_focus_pos
+        items_below = item_count - (items_above + items_visible)
+        if items_above == 0:
+            self.header = self._make_header()
+        else:
+            self.header = self._make_header(float(items_above) / item_count)
+        if items_below == 0:
+            self.footer = self._make_footer()
+        else:
+            self.footer = self._make_footer(float(items_below) / item_count)
+
+    def render(self, size, focus=False):
+        if self.refresh_headers or self.last_size != size:
+            if size is None or len(size) != 2:
+                self.header = self._make_header()
+                self.footer = self._make_footer()
+            else:
+                used_rows, _orig_rows = self.frame_top_bottom(size,
+                                                              focus=focus)
+                (maxcols, maxrows) = size
+                real_size = (maxcols, max(0, maxrows - sum(used_rows)))
+                self._reset_footer_header(real_size)
+            self.refresh_headers = False
+            self.last_size = size
+        return super(SizingFrame, self).render(size, focus)
 
 ###
 
@@ -742,9 +806,7 @@ def main():
 
     review_table = ReviewTable(max_size=options.back)
     review_table.left_footer.set_text("Initializing...")
-    frame = urwid.Frame(urwid.AttrWrap(review_table, 'body'),
-                        footer=review_table.footer,
-                        header=review_table.header)
+    frame = SizingFrame(review_table)
 
     def filter_event(event):
         if len(options.projects) == 0:
