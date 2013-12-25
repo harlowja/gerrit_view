@@ -460,7 +460,6 @@ class ReviewTable(urwid.ListBox):
         ]
         self._sort_idx = 0
         self._rows = []
-        self.frame = None
 
     def _sort_text(self, col_name, asc):
         col_idx = COLUMN_2_IDX[col_name]
