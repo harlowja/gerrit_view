@@ -54,6 +54,7 @@ VISIBLE_LIST_LEN = 50
 PREFETCH_LEN = VISIBLE_LIST_LEN
 ALARM_FREQ = 1.0
 SANITY_QUERY = 'status:open limit:%s'
+QUEUE_MAX_SIZE = 1000
 
 ### GUI CONSTANTS
 
@@ -820,7 +821,7 @@ def main():
         'prefetch': max(0, options.prefetch),
         'record': options.record,
     }
-    event_queue = Queue.Queue()
+    event_queue = Queue.Queue(maxsize=QUEUE_MAX_SIZE)
     gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
     gerrit_details = collections.defaultdict(int)
 
