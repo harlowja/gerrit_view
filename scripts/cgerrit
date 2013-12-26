@@ -512,24 +512,6 @@ class ReviewTable(urwid.ListBox):
     def max_size(self):
         return self._max_size
 
-    @property
-    def right_footer(self):
-        if self._footer_pieces[2] is None:
-            self._footer_pieces[2] = urwid.Text('', align='right')
-        return self._footer_pieces[2]
-
-    @property
-    def left_footer(self):
-        if self._footer_pieces[0] is None:
-            self._footer_pieces[0] = urwid.Text('', align='left')
-        return self._footer_pieces[0]
-
-    @property
-    def center_footer(self):
-        if self._footer_pieces[1] is None:
-            self._footer_pieces[1] = urwid.Text('', align='center')
-        return self._footer_pieces[1]
-
     def _add_row(self, row):
         if len(row.contents) != len(COLUMNS):
             raise RuntimeError("Attempt to add a row with differing"
@@ -646,35 +628,51 @@ class ReviewTable(urwid.ListBox):
             self.body.pop()
         self.body.extend(new_body)
 
-    def keypress(self, size, key):
-        key = super(ReviewTable, self).keypress(size, key)
-        if not key:
-            return None
-        if key in ('s', 'S'):
-            self._sort_idx += 1
-            self._sort_idx = self._sort_idx % len(self._sort_by)
-            (sort_title, sort_functor) = self._sort_by[self._sort_idx]
-            if not all([sort_title, sort_functor]):
-                self.center_footer.set_text("")
-                self._refill(self._rows)
-            else:
-                self.center_footer.set_text("Sort: %s" % (sort_title))
-                self._refill(sorted(self._rows, cmp=sort_functor))
-            return None
-        return key
+    def next_sort(self):
+        self._sort_idx += 1
+        self._sort_idx = self._sort_idx % len(self._sort_by)
+        (sort_title, sort_functor) = self._sort_by[self._sort_idx]
+        if not all([sort_title, sort_functor]):
+            self._refill(self._rows)
+        else:
+            self._refill(sorted(self._rows, cmp=sort_functor))
+        return sort_title
 
 
 class SizingFrame(urwid.Frame):
     def __init__(self, review_table):
         super(SizingFrame, self).__init__(urwid.AttrWrap(review_table, 'body'))
-        self.review_table = review_table
-        connect_signal(self.review_table.body, 'modified',
+        self._review_table = review_table
+        connect_signal(self._review_table.body, 'modified',
                        self._set_refresh_header_footer)
-        self.refresh_headers = True
-        self.last_size = (-1, -1)
+        self._refresh_headers = True
+        self._last_size = (-1, -1)
+        self._footer_pieces = [None, None, None]
+
+    @property
+    def review_table(self):
+        return self._review_table
+
+    @property
+    def right_footer(self):
+        if self._footer_pieces[2] is None:
+            self._footer_pieces[2] = urwid.Text('', align='right')
+        return self._footer_pieces[2]
+
+    @property
+    def left_footer(self):
+        if self._footer_pieces[0] is None:
+            self._footer_pieces[0] = urwid.Text('', align='left')
+        return self._footer_pieces[0]
+
+    @property
+    def center_footer(self):
+        if self._footer_pieces[1] is None:
+            self._footer_pieces[1] = urwid.Text('', align='center')
+        return self._footer_pieces[1]
 
     def _set_refresh_header_footer(self):
-        self.refresh_headers = True
+        self._refresh_headers = True
 
     def _make_header(self, percent_below=None):
         table_header = []
@@ -700,9 +698,9 @@ class SizingFrame(urwid.Frame):
 
     def _make_footer(self, percent_above=None):
         footer_pieces = [
-            self.review_table.left_footer,
-            self.review_table.center_footer,
-            self.review_table.right_footer,
+            self.left_footer,
+            self.center_footer,
+            self.right_footer,
         ]
         cols = urwid.Columns(footer_pieces)
         f_div = urwid.Divider(u'─')
@@ -740,8 +738,21 @@ class SizingFrame(urwid.Frame):
         else:
             self.footer = self._make_footer(float(items_below) / item_count)
 
+    def keypress(self, size, key):
+        key = super(SizingFrame, self).keypress(size, key)
+        if not key:
+            return None
+        if key in ('s', 'S'):
+            sort_title = self.review_table.next_sort()
+            if sort_title:
+                self.center_footer.set_text("Sort: %s" % (sort_title))
+            else:
+                self.center_footer.set_text('')
+            return None
+        return key
+
     def render(self, size, focus=False):
-        if self.refresh_headers or self.last_size != size:
+        if self._refresh_headers or self._last_size != size:
             if size is None or len(size) != 2:
                 self.header = self._make_header()
                 self.footer = self._make_footer()
@@ -751,8 +762,8 @@ class SizingFrame(urwid.Frame):
                 (maxcols, maxrows) = size
                 real_size = (maxcols, max(0, maxrows - sum(used_rows)))
                 self._reset_footer_header(real_size)
-            self.refresh_headers = False
-            self.last_size = size
+            self._refresh_headers = False
+            self._last_size = size
         return super(SizingFrame, self).render(size, focus)
 
 ###
@@ -804,8 +815,8 @@ def main():
     gerrit_details = collections.defaultdict(int)
 
     review_table = ReviewTable(max_size=options.back)
-    review_table.left_footer.set_text("Initializing...")
     frame = SizingFrame(review_table)
+    frame.left_footer.set_text("Initializing...")
 
     def filter_event(event):
         if len(options.projects) == 0:
@@ -850,7 +861,8 @@ def main():
                 process_event(e)
             except Exception:
                 LOG.exception("Failed handling event: %s", e)
-        detail_text = "%s, %s events received (%sp, %sc, %sm, %sr, %sa)"
+        detail_text = ("%s, %s events received"
+                       " (%sp, %sc, %sm, %sr, %sa)")
         detail_text = detail_text % (_format_date(),
                                      sum(gerrit_details.values()),
                                      gerrit_details.get('patchset-created', 0),
@@ -858,17 +870,17 @@ def main():
                                      gerrit_details.get('change-merged', 0),
                                      gerrit_details.get('change-restored', 0),
                                      gerrit_details.get('change-abandoned', 0))
-        review_table.right_footer.set_text(detail_text)
+        frame.right_footer.set_text(detail_text)
         if gerrit_reader.is_alive():
             if not gerrit_reader.connected:
-                review_table.left_footer.set_text("Connecting...")
+                frame.left_footer.set_text("Connecting...")
             else:
                 if len(evs) == 0:
-                    review_table.left_footer.set_text("Waiting for events...")
+                    frame.left_footer.set_text("Waiting for events...")
                 else:
-                    review_table.left_footer.set_text("Processing events...")
+                    frame.left_footer.set_text("Processing events...")
         else:
-            review_table.left_footer.set_text("Initializing...")
+            frame.left_footer.set_text("Initializing...")
 
     def on_idle(loop):
         loop.set_alarm_in(ALARM_FREQ, process_gerrit)
