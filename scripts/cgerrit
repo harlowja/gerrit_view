@@ -108,6 +108,14 @@ HIGHLIGHT_WORDS = {
     'fails': 'failed',
 }
 COLUMN_2_IDX = dict((k, i) for (i, k) in enumerate(COLUMNS))
+REFRESH_KEYS = (
+    urwid.CURSOR_UP,
+    urwid.CURSOR_DOWN,
+    urwid.CURSOR_PAGE_UP,
+    urwid.CURSOR_PAGE_DOWN,
+)
+SORT_CHANGE_KEYS = ('s', 'S')
+QUIT_KEYS = ('q', 'Q', 'esc')
 
 ### HELPERS
 
@@ -738,10 +746,13 @@ class SizingFrame(urwid.Frame):
             self.footer = self._make_footer(float(items_below) / item_count)
 
     def keypress(self, size, key):
+        m_key = self._command_map[key]
+        if m_key in REFRESH_KEYS:
+            self._set_refresh_header_footer()
         key = super(SizingFrame, self).keypress(size, key)
         if not key:
             return None
-        if key in ('s', 'S'):
+        if key in SORT_CHANGE_KEYS:
             sort_title = self.review_table.next_sort()
             if sort_title:
                 self.center_footer.set_text("Sort: %s" % (sort_title))
@@ -830,7 +841,7 @@ def main():
         return True
 
     def on_unhandled_input(key):
-        if key in ('q', 'Q', 'esc'):
+        if key in QUIT_KEYS:
             raise urwid.ExitMainLoop()
 
     def process_event(event):

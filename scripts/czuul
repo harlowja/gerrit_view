@@ -61,6 +61,8 @@ PALETTE = (
     # Column usage
     ('selected', urwid.DARK_GRAY, urwid.DEFAULT),
 )
+QUIT_KEYS = ('q', 'Q', 'esc')
+REFRESH_KEYS = ('r', 'R')
 
 
 def select_time_attr(secs):
@@ -379,7 +381,7 @@ class CyclingColumns(urwid.Columns):
         else:
             key = w.keypress((mc,) + size[1:], key)
         m_key = self._command_map[key]
-        if m_key not in ('cursor left', 'cursor right'):
+        if m_key not in (urwid.CURSOR_LEFT, urwid.CURSOR_RIGHT):
             return key
         k = i
         content_len = len(self.contents)
@@ -389,11 +391,11 @@ class CyclingColumns(urwid.Columns):
         if self.right_arrow_on:
             content_len -= 1
         if k == 0:
-            if m_key == 'cursor left':
+            if m_key == urwid.CURSOR_LEFT:
                 if self.shift_contents_right():
                     return None
         if k + 1 == content_len:
-            if m_key == 'cursor right':
+            if m_key == urwid.CURSOR_RIGHT:
                 if self.shift_contents_left():
                     for m in reversed(list(range(0, len(self.contents)))):
                         if not self.contents[m][0].selectable():
@@ -402,7 +404,7 @@ class CyclingColumns(urwid.Columns):
                         break
                     return None
         candidates = []
-        if m_key == 'cursor right':
+        if m_key == urwid.CURSOR_RIGHT:
             candidates.extend(range(i + 1, len(self.contents)))
         else:
             candidates.extend(reversed(list(range(0, i))))
@@ -444,7 +446,7 @@ class ZuulFrame(urwid.Frame):
         super(ZuulFrame, self).__init__(self.columns, footer=footer)
 
     def keypress(self, size, key):
-        if key in ('r', 'R'):
+        if key in REFRESH_KEYS:
             self.source.event.set()
             return None
         return super(ZuulFrame, self).keypress(size, key)
@@ -554,7 +556,7 @@ def refresh_zuul(loop, frame):
 
 
 def on_unhandled_input(key):
-    if key in ('q', 'Q', 'esc'):
+    if key in QUIT_KEYS:
         raise urwid.ExitMainLoop()
 
 
