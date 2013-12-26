@@ -444,7 +444,6 @@ class ReviewTable(urwid.ListBox):
         super(ReviewTable, self).__init__(urwid.SimpleListWalker([]))
         assert int(max_size) > 0, "Max size must be > 0"
         self._max_size = int(max_size)
-        self._footer_pieces = [None, None, None]
         self._sort_by = [
             (None, None),  # no sorting
             ('Created On (Desc)', self._sort_date("Created On", False)),
