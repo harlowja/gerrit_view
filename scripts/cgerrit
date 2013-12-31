@@ -95,7 +95,7 @@ COLUMN_ATTRIBUTES = {
     'Topic': (urwid.WEIGHT, 0.33),
     'Url': (urwid.FIXED, 35),
     'Subject': (urwid.WEIGHT, 1.0),
-    'Comment': (urwid.WEIGHT, 0.60),
+    'Comment': (urwid.WEIGHT, 0.8),
 }
 HIGHLIGHT_WORDS = {
     # These words get special colored highlighting.
