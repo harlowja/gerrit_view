@@ -83,18 +83,18 @@ COLUMNS = (
 COLUMN_TRUNCATES = {
     # This determines how the columns will be trucated (at what length will
     # truncation be forced to avoid huge strings).
-    'comment': 120,
-    'reason': 120,
+    'comment': 140,
     'subject': 60,
 }
+COLUMN_TRUNCATES['reason'] = COLUMN_TRUNCATES['comment']
 COLUMN_ATTRIBUTES = {
-    'Created On': (urwid.WEIGHT, 0.5),
+    'Created On': (urwid.WEIGHT, 0.33),
     'Status': (urwid.FIXED, 9),
     'Username': (urwid.WEIGHT, 0.33),
     'Project': (urwid.WEIGHT, 0.5),
     'Topic': (urwid.WEIGHT, 0.33),
     'Url': (urwid.FIXED, 35),
-    'Subject': (urwid.WEIGHT, 1.0),
+    'Subject': (urwid.WEIGHT, 0.8),
     'Comment': (urwid.WEIGHT, 0.8),
 }
 HIGHLIGHT_WORDS = {
@@ -121,18 +121,20 @@ QUIT_KEYS = ('q', 'Q', 'esc')
 ### HELPERS
 
 
-def _format_text(text):
+def _format_text(text, align=None):
     text_pieces = []
     for t in re.split(r"([\s.\-,!])", text):
         if t.lower() in HIGHLIGHT_WORDS:
             text_pieces.append((HIGHLIGHT_WORDS[t.lower()], t))
         else:
             text_pieces.append(t)
-    return _make_text(text_pieces)
+    return _make_text(text_pieces, align=align)
 
 
-def _make_text(text):
-    return urwid.Text(text, wrap='any', align='left')
+def _make_text(text, align=None):
+    if not align:
+        align = 'left'
+    return urwid.Text(text, wrap='any', align=align)
 
 
 def _get_key_path():
@@ -694,7 +696,7 @@ class SizingFrame(urwid.Frame):
         table_cols = urwid.Columns(table_header, dividechars=1)
         h_div = urwid.Divider(u'─')
         if percent_below is not None:
-            comp = urwid.Text(u"⇡%i%%⇡" % (percent_below * 100.0))
+            comp = urwid.Text(u"⇡%i%%⇡" % (percent_below * 100))
             header_cols = urwid.Columns([
                 h_div,
                 (urwid.FLOW, comp),
