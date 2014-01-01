@@ -347,17 +347,13 @@ class GerritWatcher(threading.Thread):
             self._consume()
 
 
-def _consume_queue(queue, allotted_secs=0.005):
+def _consume_queue(queue):
     events = []
-    end_time = time.time() + max(0, allotted_secs)
-    while time.time() <= end_time:
+    while True:
         try:
-            left_time = end_time - time.time()
-            if left_time <= 0:
-                break
-            events.append(queue.get(block=True, timeout=left_time))
+            events.append(queue.get(block=False))
         except Queue.Empty:
-            pass
+            break
     return events
 
 
@@ -867,15 +863,8 @@ def main():
         else:
             raise RuntimeError("Unknown event type: '%s'" % (event_type))
 
-    def process_gerrit(loop, user_data):
-        evs = _consume_queue(event_queue)
-        for e in evs:
-            try:
-                process_event(e)
-            except Exception:
-                LOG.exception("Failed handling event: %s", e)
-        detail_text = ("%s, %s events received"
-                       " (%sp, %sc, %sm, %sr, %sa)")
+    def update_footer(events):
+        detail_text = "%s, %s events received (%sp, %sc, %sm, %sr, %sa)"
         detail_text = detail_text % (_format_date(),
                                      sum(gerrit_details.values()),
                                      gerrit_details.get('patchset-created', 0),
@@ -888,12 +877,21 @@ def main():
             if not gerrit_reader.connected:
                 frame.left_footer.set_text("Connecting...")
             else:
-                if len(evs) == 0:
+                if events == 0:
                     frame.left_footer.set_text("Waiting for events...")
                 else:
                     frame.left_footer.set_text("Processing events...")
         else:
             frame.left_footer.set_text("Initializing...")
+
+    def process_gerrit(loop, user_data):
+        evs = _consume_queue(event_queue)
+        for e in evs:
+            try:
+                process_event(e)
+            except Exception:
+                LOG.exception("Failed handling event: %s", e)
+        update_footer(len(evs))
 
     def on_idle(loop):
         loop.set_alarm_in(ALARM_FREQ, process_gerrit)
