@@ -705,7 +705,7 @@ class SizingFrame(urwid.Frame):
     def _make_footer(self, percent_above=None):
         footer_pieces = [
             self.left_footer,
-            self.center_footer,
+            (urwid.FLOW, self.center_footer),
             self.right_footer,
         ]
         cols = urwid.Columns(footer_pieces)
