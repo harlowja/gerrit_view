@@ -77,6 +77,7 @@ COLUMNS = (
     "Project",
     'Subject',
     'Created On',
+    'Updated On',
     'Status',
     'Comment',
 )
@@ -89,6 +90,7 @@ COLUMN_TRUNCATES = {
 COLUMN_TRUNCATES['reason'] = COLUMN_TRUNCATES['comment']
 COLUMN_ATTRIBUTES = {
     'Created On': (urwid.WEIGHT, 0.33),
+    'Updated On': (urwid.WEIGHT, 0.33),
     'Status': (urwid.FIXED, 9),
     'Username': (urwid.WEIGHT, 0.33),
     'Project': (urwid.WEIGHT, 0.5),
@@ -455,6 +457,8 @@ class ReviewTable(urwid.ListBox):
             (None, None),  # no sorting
             ('Created On (Desc)', self._sort_date("Created On", False)),
             ('Created On (Asc)', self._sort_date("Created On", True)),
+            ('Updated On (Desc)', self._sort_date("Updated On", False)),
+            ('Updated On (Asc)', self._sort_date("Updated On", True)),
             ('Subject (Desc)', self._sort_text("Subject", False)),
             ('Subject (Asc)', self._sort_text("Subject", True)),
             ('Username (Desc)', self._sort_text("Username", False)),
@@ -543,6 +547,15 @@ class ReviewTable(urwid.ListBox):
                 break
         return m_c
 
+    def _update_last_updated(self, match):
+        updated_i = COLUMN_2_IDX['Updated On']
+        new_contents = list(match.contents[updated_i])
+        new_contents[0] = ReviewDate(datetime.now())
+        match.contents[updated_i] = tuple(new_contents)
+        (sort_title, sort_functor) = self._sort_by[self._sort_idx]
+        if sort_title and sort_title.startswith("Updated On"):
+            self._refill(sorted(self._rows, cmp=sort_functor))
+
     def _set_status(self, match, text):
         if not text or match is None:
             return None
@@ -557,6 +570,7 @@ class ReviewTable(urwid.ListBox):
         match = self._find_change(change)
         if match is not None:
             self._set_status(match, 'Merged')
+            self._update_last_updated(match)
 
     def on_change_restored(self, event):
         change = event['change']
@@ -569,6 +583,7 @@ class ReviewTable(urwid.ListBox):
                 new_column[0] = _format_text(reason)
                 match.contents[comment_i] = tuple(new_column)
             self._set_status(match, 'Restored')
+            self._update_last_updated(match)
 
     def on_comment_added(self, event):
         change = event['change']
@@ -581,6 +596,7 @@ class ReviewTable(urwid.ListBox):
                 new_column[0] = _format_text(comment)
                 match.contents[comment_i] = tuple(new_column)
             self._set_status(match, _get_change_status(event))
+            self._update_last_updated(match)
 
     def on_change_abandoned(self, event):
         change = event['change']
@@ -593,6 +609,7 @@ class ReviewTable(urwid.ListBox):
                 new_column[0] = _format_text(reason)
                 match.contents[comment_i] = tuple(new_column)
             self._set_status(match, 'Abandoned')
+            self._update_last_updated(match)
 
     def on_patchset_created(self, event):
         change = event['change']
@@ -602,6 +619,9 @@ class ReviewTable(urwid.ListBox):
             return
         patch_set = event['patchSet']
         uploader = event['uploader']
+        last_updated = _get_date('lastUpdated', patch_set)
+        if last_updated is None:
+            last_updated = datetime.now()
         row = [
             ToggleText(_get_text('username', uploader),
                        wrap='space', align='left'),
@@ -610,6 +630,7 @@ class ReviewTable(urwid.ListBox):
             _get_text('project', change),
             _get_text('subject', change),
             ReviewDate(_get_date('createdOn', patch_set)),
+            ReviewDate(last_updated),
             "",  # status
             "",  # comment
         ]
