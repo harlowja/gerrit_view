@@ -583,7 +583,7 @@ def main():
     parser.add_option("-p", "--pipeline", dest="pipelines", action='append',
                       help="only show given pipelines reviews",
                       metavar="PIPELINE", default=[])
-    parser.add_option("--poll", dest="frequency", action='store',
+    parser.add_option("-r", "--refresh", dest="frequency", action='store',
                       type=int,
                       help="refresh every X seconds [default: %default]",
                       metavar="SECONDS", default=ZUUL_FREQ)
