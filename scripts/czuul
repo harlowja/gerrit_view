@@ -183,6 +183,7 @@ class ZuulReview(urwid.Pile):
             urwid.Columns([title, (urwid.FIXED, 12, self.eta_text)]),
             self.progress_bar,
         ]
+        self.project = review.get("project")
         for item in rows:
             self.contents.append((item, (urwid.WEIGHT, 1)))
 
@@ -479,6 +480,7 @@ class ZuulFrame(urwid.Frame):
                         except (KeyError, TypeError):
                             pass
 
+        ok_projects = set([p.lower() for p in self.options.projects])
         reviews = {}
         cleaned_pipes = {}
         ordered_pipes = sorted(pipes.keys())
@@ -490,6 +492,8 @@ class ZuulFrame(urwid.Frame):
             for p in zuul_data.get('pipelines', []):
                 if p.get('name') == name:
                     for (r, raw_data) in iter_pipeline(p):
+                        if len(ok_projects) and r.project not in ok_projects:
+                            continue
                         if r.review_id in self.last_reviews:
                             r = self.last_reviews[r.review_id]
                         try:
@@ -583,6 +587,9 @@ def main():
                       type=int,
                       help="refresh every X seconds [default: %default]",
                       metavar="SECONDS", default=ZUUL_FREQ)
+    parser.add_option("--project", dest="projects", action='append',
+                      help="only show given projects reviews",
+                      metavar="PROJECT", default=[])
     (options, args) = parser.parse_args()
     if options.frequency < ZUUL_MIN_FREQ:
         parser.error("poll frequency must be greater or equal to %s seconds"
