@@ -17,6 +17,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import fnmatch
 import functools
 import logging
 import optparse
@@ -454,17 +455,28 @@ class ZuulFrame(urwid.Frame):
             return None
         return super(ZuulFrame, self).keypress(size, key)
 
+    def _valid_entry(self, ok_set, entry):
+        if not entry:
+            return False
+        if len(ok_set) == 0:
+            return True
+        for pat in ok_set:
+            if pat == entry:
+                return True
+            if fnmatch.fnmatch(entry, pat):
+                return True
+        return False
+
     def _refresh_pipelines(self, zuul_data, screen_size):
         maxcol, maxrow = screen_size
         maxcol = maxcol / self.screen_count
 
-        ok_pipelines = set([p.lower() for p in self.options.pipelines])
         pipes = {}
+        ok_pipelines = set([p.lower() for p in self.options.pipelines])
+        valid_pipeline = functools.partial(self._valid_entry, ok_pipelines)
         for p in zuul_data.get('pipelines', []):
             pipe_name = str(p.get('name', ''))
-            if not len(pipe_name):
-                continue
-            if len(ok_pipelines) and pipe_name not in ok_pipelines:
+            if not valid_pipeline(pipe_name):
                 continue
             pipes[pipe_name] = str(p.get("description", "")).strip()
 
@@ -480,10 +492,11 @@ class ZuulFrame(urwid.Frame):
                         except (KeyError, TypeError):
                             pass
 
-        ok_projects = set([p.lower() for p in self.options.projects])
         reviews = {}
         cleaned_pipes = {}
         ordered_pipes = sorted(pipes.keys())
+        ok_projects = set([p.lower() for p in self.options.projects])
+        valid_project = functools.partial(self._valid_entry, ok_projects)
         for name in ordered_pipes:
             cleaned_pipes[name] = {
                 'pipeline': ZuulPipelineHeader(name, pipes[name]),
@@ -492,7 +505,7 @@ class ZuulFrame(urwid.Frame):
             for p in zuul_data.get('pipelines', []):
                 if p.get('name') == name:
                     for (r, raw_data) in iter_pipeline(p):
-                        if len(ok_projects) and r.project not in ok_projects:
+                        if not valid_project(r.project):
                             continue
                         if r.review_id in self.last_reviews:
                             r = self.last_reviews[r.review_id]
