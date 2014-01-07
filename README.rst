@@ -94,6 +94,9 @@ urwid_, curses_ library and the requests_ library):
                             split screen count [default: 3]
       -p PIPELINE, --pipeline=PIPELINE
                             only show given pipelines reviews
+      -r SECONDS, --refresh=SECONDS
+                            refresh every X seconds [default: 30]
+      --project=PROJECT     only show given projects reviews
 
 ##############
 Keys supported
