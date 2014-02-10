@@ -17,14 +17,21 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import copy
 import fnmatch
 import functools
 import logging
 import optparse
+import os
+import subprocess
 import sys
+import tempfile
 import threading
 
+from six.moves import queue
+
 import requests
+import six
 import urwid
 
 from datetime import (datetime, timedelta)
@@ -64,6 +71,12 @@ PALETTE = (
 )
 QUIT_KEYS = ('q', 'Q', 'esc')
 REFRESH_KEYS = ('r', 'R')
+
+# Other constants
+DETAILS_GIT = {
+    'summary': "%s",
+    'author': "%an",
+}
 
 
 def select_time_attr(secs):
@@ -132,6 +145,99 @@ def get_int_key(k, in_what, default=0):
         return default
 
 
+class ReviewFinder(threading.Thread):
+    def __init__(self, options):
+        super(ReviewFinder, self).__init__()
+        self.options = options
+        self.daemon = True
+        self.work = queue.Queue()
+        self.code_dir = options.detail_dir
+
+    def _process(self, raw_data):
+        project = raw_data.get("project")
+        review_id = raw_data.get('id')
+        change_id = None
+        try:
+            review_id, change_id = review_id.split(",", 1)
+        except ValueError:
+            pass
+        if not all([review_id, project, change_id]):
+            return
+        LOG.debug("Fetching details for %s - %s/%s",
+                  project, review_id, change_id)
+        code_dir = os.path.join(self.code_dir, project.strip("/"))
+        if not os.path.isdir(os.path.dirname(code_dir)):
+            os.makedirs(os.path.dirname(code_dir))
+        if not os.path.exists(code_dir):
+            LOG.debug("Cloning %s into %s", project, code_dir)
+            cmd = [
+                'git', 'clone', '-q',
+                'git://git.openstack.org/%s' % (project),
+                os.path.basename(project),
+            ]
+            proc = subprocess.Popen(cmd, cwd=os.path.dirname(code_dir))
+            proc.wait()
+            if proc.returncode != 0:
+                LOG.error("Failed cloning %s to %s", project, code_dir)
+                return
+        cmd = [
+            'git', 'checkout', '-q', 'master',
+        ]
+        proc = subprocess.Popen(cmd, cwd=code_dir)
+        proc.wait()
+        if proc.returncode != 0:
+            LOG.error("Failed checking out master for %s", project)
+            return
+        sub_id = review_id[-2:]
+        cmd = [
+            'git', 'fetch', '-q',
+            'https://review.openstack.org/%s' % (project),
+            'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id),
+        ]
+        proc = subprocess.Popen(cmd, cwd=code_dir)
+        proc.wait()
+        if proc.returncode != 0:
+            LOG.error("Failed checking out review for %s/%s",
+                      review_id, change_id)
+            return
+        cmd = [
+            'git', 'checkout', '-q', 'FETCH_HEAD',
+        ]
+        proc = subprocess.Popen(cmd, cwd=code_dir)
+        proc.wait()
+        if proc.returncode != 0:
+            LOG.error("Failed fetching review head for %s/%s",
+                      review_id, change_id)
+            return
+        details = {}
+        for (key, format) in six.iteritems(DETAILS_GIT):
+            cmd = [
+                'git', 'log', '-n1', '--format=' + format,
+            ]
+            proc = subprocess.Popen(cmd, cwd=code_dir,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
+            (stdout, stderr) = proc.communicate()
+            if proc.returncode == 0:
+                details[key] = stdout.strip()
+        return details
+
+    def run(self):
+        while True:
+            (raw_data, ok_cb, reset_cb) = self.work.get(True)
+            try:
+                details = self._process(raw_data)
+                if details:
+                    data = copy.deepcopy(raw_data)
+                    data.update(details)
+                    ok_cb(details)
+                else:
+                    reset_cb()
+            except Exception:
+                LOG.exception("Failed processing %s", raw_data)
+                reset_cb()
+
+
 class ZuulWatcher(threading.Thread):
     def __init__(self, options):
         super(ZuulWatcher, self).__init__()
@@ -178,15 +284,26 @@ class ZuulReview(urwid.Pile):
         title_pieces = [("title", self.review_id)]
         if review.get("url"):
             title_pieces.append(("body", " @ %s" % (review['url'])))
-        title = urwid.Text(title_pieces)
+        self.title = urwid.Text(title_pieces)
         self.eta_text = urwid.Text([('clear', "ETA")], align='right')
         rows = [
-            urwid.Columns([title, (urwid.FIXED, 12, self.eta_text)]),
+            urwid.Columns([self.title, (urwid.FIXED, 12, self.eta_text)]),
             self.progress_bar,
         ]
         self.project = review.get("project")
         for item in rows:
             self.contents.append((item, (urwid.WEIGHT, 1)))
+        self.state = None
+
+    def on_details(self, details):
+        title_pieces = [("title", self.review_id)]
+        if details.get("summary"):
+            title_pieces.append(("body", " %s" % details['summary']))
+        if details.get("url"):
+            title_pieces.append(("body", " @ %s" % (details['url'])))
+        LOG.debug("Updating title with %s", title_pieces)
+        self.title.set_text(title_pieces)
+        self.state = 'detailed'
 
     def refresh(self, review):
         new_jobs = []
@@ -436,13 +553,16 @@ class ZuulFrame(urwid.Frame):
     def __init__(self, options, source):
         self.options = options
         self.source = source
+        self.finders = {}
         screen_count = options.screens
         assert screen_count > 0, "One or more split-screens must be provided!"
         self.screen_count = screen_count
         self.right_footer = urwid.Text('', align='right')
+        self.center_footer = urwid.Text('', align='center')
         self.left_footer = urwid.Text("Initializing...", align='left')
         footer = urwid.AttrWrap(
-            urwid.Columns((self.left_footer, self.right_footer)), 'body')
+            urwid.Columns((self.left_footer,
+                           self.center_footer, self.right_footer)), 'body')
         self.last_fetched = None
         self.last_fetch_id = None
         self.columns = self._make_columns(screen_count)
@@ -492,6 +612,25 @@ class ZuulFrame(urwid.Frame):
                         except (KeyError, TypeError):
                             pass
 
+        def state_reset(r):
+            r.state = None
+
+        def fire_finder(r, raw_data):
+            if r.state in ['detailed', 'detailing']:
+                return
+            if r.project not in self.finders:
+                LOG.debug("Creating finder for project %s", r.project)
+                finder = ReviewFinder(self.options)
+                self.finders[r.project] = finder
+                finder.start()
+            r.state = 'detailing'
+            work_item = [
+                raw_data,
+                r.on_details,
+                functools.partial(state_reset, r),
+            ]
+            self.finders[r.project].work.put(work_item)
+
         reviews = {}
         cleaned_pipes = {}
         ordered_pipes = sorted(pipes.keys())
@@ -512,6 +651,8 @@ class ZuulFrame(urwid.Frame):
                         try:
                             r.refresh(raw_data)
                             reviews[r.review_id] = r
+                            if self.options.detail:
+                                fire_finder(r, raw_data)
                             cleaned_pipes[name]['reviews'].append(r.review_id)
                         except (KeyError, TypeError):
                             pass
@@ -571,6 +712,16 @@ class ZuulFrame(urwid.Frame):
         text = "Refresh expected in %s seconds..." % (much_longer_secs)
         self.left_footer.set_text(text)
 
+        if self.options.detail:
+            work_am = 0
+            for (_project, finder) in six.iteritems(self.finders):
+                work_am += finder.work.qsize()
+            if work_am == 0:
+                text = ''
+            else:
+                text = "%s reviews queued to be detailed" % work_am
+            self.center_footer.set_text(text)
+
 
 def refresh_zuul(loop, frame):
     frame.refresh(loop.screen, loop.screen_size)
@@ -603,12 +754,22 @@ def main():
     parser.add_option("--project", dest="projects", action='append',
                       help="only show given projects reviews",
                       metavar="PROJECT", default=[])
+    parser.add_option("--details", dest="detail", action='store_true',
+                      help="fetch each reviews details"
+                           " [default: %default]", default=False)
+    parser.add_option("--detail-dir", dest="detail_dir", action='store',
+                      help="store git checkout locations at"
+                           " [default: %default]",
+                      default=os.path.join(tempfile.gettempdir(), 'czuul'))
     (options, args) = parser.parse_args()
     if options.frequency < ZUUL_MIN_FREQ:
         parser.error("poll frequency must be greater or equal to %s seconds"
                      " and not %s seconds" % (ZUUL_MIN_FREQ,
                                               options.frequency))
 
+    if options.detail:
+        if not os.path.isdir(options.detail_dir):
+            os.makedirs(options.detail_dir)
     watcher = ZuulWatcher(options)
     frame = ZuulFrame(options, watcher)
     loop = urwid.MainLoop(frame, PALETTE,
