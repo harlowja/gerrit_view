@@ -284,10 +284,10 @@ class ZuulReview(urwid.Pile):
         title_pieces = [("title", self.review_id)]
         if review.get("url"):
             title_pieces.append(("body", " @ %s" % (review['url'])))
-        self.title = urwid.Text(title_pieces)
+        title = urwid.Text(title_pieces)
         self.eta_text = urwid.Text([('clear', "ETA")], align='right')
         rows = [
-            urwid.Columns([self.title, (urwid.FIXED, 12, self.eta_text)]),
+            urwid.Columns([title, (urwid.FIXED, 12, self.eta_text)]),
             self.progress_bar,
         ]
         self.project = review.get("project")
@@ -296,13 +296,14 @@ class ZuulReview(urwid.Pile):
         self.state = None
 
     def on_details(self, details):
-        title_pieces = [("title", self.review_id)]
-        if details.get("summary"):
-            title_pieces.append(("body", " %s" % details['summary']))
-        if details.get("url"):
-            title_pieces.append(("body", " @ %s" % (details['url'])))
-        LOG.debug("Updating title with %s", title_pieces)
-        self.title.set_text(title_pieces)
+        summary = details.get("summary")
+        if summary:
+            rows = [
+                urwid.Divider(u'─'),
+                urwid.Text([('title', summary)], align='center'),
+                urwid.Divider(u'─'),
+            ]
+            self.contents.insert(0, (urwid.Pile(rows), (urwid.WEIGHT, 1)))
         self.state = 'detailed'
 
     def refresh(self, review):
