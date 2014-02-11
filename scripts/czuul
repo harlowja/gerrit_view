@@ -79,6 +79,14 @@ DETAILS_GIT = {
 }
 
 
+def run_process(cmd, cwd=None):
+    proc = subprocess.Popen(cmd, cwd=cwd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    (stdout, stderr) = proc.communicate()
+    return (proc.returncode, stdout, stderr)
+
+
 def select_time_attr(secs):
     secs = max(0, int(secs))
     if secs <= 300:
@@ -175,18 +183,21 @@ class ReviewFinder(threading.Thread):
                 'git://git.openstack.org/%s' % (project),
                 os.path.basename(project),
             ]
-            proc = subprocess.Popen(cmd, cwd=os.path.dirname(code_dir))
-            proc.wait()
-            if proc.returncode != 0:
+            (rc, stdout, stderr) = run_process(cmd,
+                                               cwd=os.path.dirname(code_dir))
+            if rc != 0:
                 LOG.error("Failed cloning %s to %s", project, code_dir)
+                LOG.debug(">> %s (stdout)", stdout)
+                LOG.debug(">> %s (stderr)", stderr)
                 return
         cmd = [
             'git', 'checkout', '-q', 'master',
         ]
-        proc = subprocess.Popen(cmd, cwd=code_dir)
-        proc.wait()
-        if proc.returncode != 0:
+        (rc, stdout, stderr) = run_process(cmd, cwd=code_dir)
+        if rc != 0:
             LOG.error("Failed checking out master for %s", project)
+            LOG.debug(">> %s (stdout)", stdout)
+            LOG.debug(">> %s (stderr)", stderr)
             return
         sub_id = review_id[-2:]
         cmd = [
@@ -194,32 +205,35 @@ class ReviewFinder(threading.Thread):
             'https://review.openstack.org/%s' % (project),
             'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id),
         ]
-        proc = subprocess.Popen(cmd, cwd=code_dir)
-        proc.wait()
-        if proc.returncode != 0:
+        (rc, stdout, stderr) = run_process(cmd, cwd=code_dir)
+        if rc != 0:
             LOG.error("Failed checking out review for %s/%s",
                       review_id, change_id)
+            LOG.debug(">> %s (stdout)", stdout)
+            LOG.debug(">> %s (stderr)", stderr)
             return
         cmd = [
-            'git', 'checkout', '-q', 'FETCH_HEAD',
+            'git', 'checkout', 'FETCH_HEAD',
         ]
-        proc = subprocess.Popen(cmd, cwd=code_dir)
-        proc.wait()
-        if proc.returncode != 0:
-            LOG.error("Failed fetching review head for %s/%s",
+        (rc, stdout, stderr) = run_process(cmd, cwd=code_dir)
+        if rc != 0:
+            LOG.error("Failed fetching review FETCH_HEAD for %s/%s",
                       review_id, change_id)
+            LOG.debug(">> %s (stdout)", stdout)
+            LOG.debug(">> %s (stderr)", stderr)
             return
         details = {}
         for (key, format) in six.iteritems(DETAILS_GIT):
             cmd = [
                 'git', 'log', '-n1', '--format=' + format,
             ]
-            proc = subprocess.Popen(cmd, cwd=code_dir,
-                                    stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE)
-            (stdout, stderr) = proc.communicate()
-            if proc.returncode == 0:
+            (rc, stdout, stderr) = run_process(cmd, cwd=code_dir)
+            if rc == 0:
                 details[key] = stdout.strip()
+            else:
+                LOG.error("Failed running %s", cmd)
+                LOG.debug(">> %s (stdout)", stdout)
+                LOG.debug(">> %s (stderr)", stderr)
         return details
 
     def run(self):
