@@ -18,11 +18,13 @@
 #    under the License.
 
 import copy
+import errno
 import fnmatch
 import functools
 import logging
 import optparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -56,6 +58,7 @@ PALETTE = (
     ('body', urwid.DEFAULT, urwid.DEFAULT),
     ('title', urwid.LIGHT_CYAN, urwid.DEFAULT, 'standout'),
     ('clear', urwid.WHITE, urwid.DEFAULT, 'standout'),
+    ('author', urwid.DARK_GREEN, urwid.DEFAULT, 'standout'),
     # Time usage
     ('ok', urwid.LIGHT_GREEN, urwid.DEFAULT),
     ('dead', urwid.DARK_RED, urwid.DEFAULT, 'bold,underline'),
@@ -161,6 +164,22 @@ class ReviewFinder(threading.Thread):
         self.work = queue.Queue()
         self.code_dir = options.detail_dir
 
+    def _clone_project(self, project):
+        tmp_dir = tempfile.mkdtemp()
+        cmd = [
+            'git', 'clone', '-q',
+            'git://git.openstack.org/%s' % (project),
+            os.path.basename(project),
+        ]
+        (rc, stdout, stderr) = run_process(cmd, cwd=tmp_dir)
+        if rc != 0:
+            LOG.error("Failed cloning %s into %s", project, tmp_dir)
+            LOG.debug(">> %s (stdout)", stdout)
+            LOG.debug(">> %s (stderr)", stderr)
+            return None
+        else:
+            return os.path.join(tmp_dir, os.path.basename(project))
+
     def _process(self, raw_data):
         project = raw_data.get("project")
         review_id = raw_data.get('id')
@@ -173,27 +192,30 @@ class ReviewFinder(threading.Thread):
             return
         LOG.debug("Fetching details for %s - %s/%s",
                   project, review_id, change_id)
-        code_dir = os.path.join(self.code_dir, project.strip("/"))
-        if not os.path.isdir(os.path.dirname(code_dir)):
-            os.makedirs(os.path.dirname(code_dir))
-        if not os.path.exists(code_dir):
-            LOG.debug("Cloning %s into %s", project, code_dir)
-            cmd = [
-                'git', 'clone', '-q',
-                'git://git.openstack.org/%s' % (project),
-                os.path.basename(project),
-            ]
-            (rc, stdout, stderr) = run_process(cmd,
-                                               cwd=os.path.dirname(code_dir))
-            if rc != 0:
-                LOG.error("Failed cloning %s to %s", project, code_dir)
-                LOG.debug(">> %s (stdout)", stdout)
-                LOG.debug(">> %s (stderr)", stderr)
-                return
+        code_path = os.path.join(self.code_dir, project.strip("/"))
+        try:
+            if not os.path.isdir(os.path.dirname(code_path)):
+                os.makedirs(os.path.dirname(code_path))
+        except IOError as e:
+            if e.errno != errno.EEXIST:
+                raise
+        try:
+            if not os.path.exists(code_path):
+                clone_path = self._clone_project(project)
+                if not clone_path:
+                    return
+                try:
+                    shutil.move(clone_path, code_path)
+                finally:
+                    shutil.rmtree(os.path.dirname(clone_path),
+                                  ignore_errors=True)
+        except IOError as e:
+            if e.errno != errno.EEXIST:
+                raise
         cmd = [
             'git', 'checkout', '-q', 'master',
         ]
-        (rc, stdout, stderr) = run_process(cmd, cwd=code_dir)
+        (rc, stdout, stderr) = run_process(cmd, cwd=code_path)
         if rc != 0:
             LOG.error("Failed checking out master for %s", project)
             LOG.debug(">> %s (stdout)", stdout)
@@ -205,7 +227,7 @@ class ReviewFinder(threading.Thread):
             'https://review.openstack.org/%s' % (project),
             'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id),
         ]
-        (rc, stdout, stderr) = run_process(cmd, cwd=code_dir)
+        (rc, stdout, stderr) = run_process(cmd, cwd=code_path)
         if rc != 0:
             LOG.error("Failed checking out review for %s/%s",
                       review_id, change_id)
@@ -215,7 +237,7 @@ class ReviewFinder(threading.Thread):
         cmd = [
             'git', 'checkout', 'FETCH_HEAD',
         ]
-        (rc, stdout, stderr) = run_process(cmd, cwd=code_dir)
+        (rc, stdout, stderr) = run_process(cmd, cwd=code_path)
         if rc != 0:
             LOG.error("Failed fetching review FETCH_HEAD for %s/%s",
                       review_id, change_id)
@@ -227,7 +249,7 @@ class ReviewFinder(threading.Thread):
             cmd = [
                 'git', 'log', '-n1', '--format=' + format,
             ]
-            (rc, stdout, stderr) = run_process(cmd, cwd=code_dir)
+            (rc, stdout, stderr) = run_process(cmd, cwd=code_path)
             if rc == 0:
                 details[key] = stdout.strip()
             else:
@@ -310,14 +332,22 @@ class ZuulReview(urwid.Pile):
         self.state = None
 
     def on_details(self, details):
+        extra_rows = []
         summary = details.get("summary")
         if summary:
-            rows = [
-                urwid.Divider(u'─'),
+            extra_rows.extend([
                 urwid.Text([('title', summary)], align='center'),
-                urwid.Divider(u'─'),
-            ]
-            self.contents.insert(0, (urwid.Pile(rows), (urwid.WEIGHT, 1)))
+            ])
+        author = details.get("author")
+        if author:
+            author = "- %s -" % (author)
+            extra_rows.extend([
+                urwid.Text([('author', author)], align='center'),
+            ])
+        if extra_rows:
+            extra_rows.insert(0, urwid.Divider(u'─'))
+            extra_rows.append(urwid.Divider(u'─'))
+            self.contents.insert(0, (urwid.Pile(extra_rows), (urwid.WEIGHT, 1)))
         self.state = 'detailed'
 
     def refresh(self, review):
@@ -631,7 +661,7 @@ class ZuulFrame(urwid.Frame):
             r.state = None
 
         def fire_finder(r, raw_data):
-            if r.state in ['detailed', 'detailing']:
+            if r.state in ('detailed', 'detailing'):
                 return
             if r.project not in self.finders:
                 LOG.debug("Creating finder for project %s", r.project)
