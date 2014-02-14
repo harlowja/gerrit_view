@@ -25,13 +25,13 @@ import logging
 import optparse
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
 
 from six.moves import queue
 
+import git
 import requests
 import six
 import urwid
@@ -76,18 +76,8 @@ QUIT_KEYS = ('q', 'Q', 'esc')
 REFRESH_KEYS = ('r', 'R')
 
 # Other constants
-DETAILS_GIT = {
-    'summary': "%s",
-    'author': "%an",
-}
-
-
-def run_process(cmd, cwd=None):
-    proc = subprocess.Popen(cmd, cwd=cwd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE)
-    (stdout, stderr) = proc.communicate()
-    return (proc.returncode, stdout, stderr)
+GIT_URI_TPL = 'git://git.openstack.org/%(project)s'
+REMOTE_URI_TPL =  'https://review.openstack.org/%(project)s'
 
 
 def select_time_attr(secs):
@@ -149,6 +139,36 @@ def decode_millis(millis):
     return (secs, minutes)
 
 
+def clone_project(project, code_path):
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        git_uri = GIT_URI_TPL % {'project': project}
+        repo_path = os.path.join(tmp_dir, os.path.basename(project))
+        os.makedirs(repo_path)
+        repo = git.Repo.clone_from(git_uri, repo_path)
+        try:
+            shutil.move(repo.working_dir, code_path)
+        except IOError as e:
+            if e.errno != errno.EEXIST:
+                raise
+        return git.Repo(code_path)
+    finally:
+        shutil.rmtree(tmp_dir)
+
+
+def reset_repo(repo):
+    origin = repo.remotes.origin
+    origin.update()
+    origin = repo.remotes.origin
+    for ref in origin.refs:
+        if ref.remote_head == 'HEAD':
+            continue
+        repo.create_head(ref.remote_head, ref, force=True)
+    repo.head.reference = origin.refs['HEAD']
+    repo.head.reset(index=True, working_tree=True)
+    repo.git.clean('-x', '-f', '-d')
+
+
 def get_int_key(k, in_what, default=0):
     try:
         return int(in_what[k])
@@ -164,22 +184,6 @@ class ReviewFinder(threading.Thread):
         self.work = queue.Queue()
         self.code_dir = options.detail_dir
 
-    def _clone_project(self, project):
-        tmp_dir = tempfile.mkdtemp()
-        cmd = [
-            'git', 'clone', '-q',
-            'git://git.openstack.org/%s' % (project),
-            os.path.basename(project),
-        ]
-        (rc, stdout, stderr) = run_process(cmd, cwd=tmp_dir)
-        if rc != 0:
-            LOG.error("Failed cloning %s into %s", project, tmp_dir)
-            LOG.debug(">> %s (stdout)", stdout)
-            LOG.debug(">> %s (stderr)", stderr)
-            return None
-        else:
-            return os.path.join(tmp_dir, os.path.basename(project))
-
     def _process(self, raw_data):
         project = raw_data.get("project")
         review_id = raw_data.get('id')
@@ -189,7 +193,8 @@ class ReviewFinder(threading.Thread):
         except ValueError:
             pass
         if not all([review_id, project, change_id]):
-            return
+            raise ValueError("Not enough correct inputs values provided")
+
         LOG.debug("Fetching details for %s - %s/%s",
                   project, review_id, change_id)
         code_path = os.path.join(self.code_dir, project.strip("/"))
@@ -199,76 +204,53 @@ class ReviewFinder(threading.Thread):
         except IOError as e:
             if e.errno != errno.EEXIST:
                 raise
+        if not os.path.exists(code_path):
+            repo = clone_project(project, code_path)
+        else:
+            repo = git.Repo(code_path)
+
+        reset_repo(repo)
+        remote_uri = REMOTE_URI_TPL % {'project': project}
+        remote = repo.create_remote(review_id, remote_uri)
         try:
-            if not os.path.exists(code_path):
-                clone_path = self._clone_project(project)
-                if not clone_path:
-                    return
-                try:
-                    shutil.move(clone_path, code_path)
-                finally:
-                    shutil.rmtree(os.path.dirname(clone_path),
-                                  ignore_errors=True)
-        except IOError as e:
-            if e.errno != errno.EEXIST:
-                raise
-        cmd = [
-            'git', 'checkout', '-q', 'master',
-        ]
-        (rc, stdout, stderr) = run_process(cmd, cwd=code_path)
-        if rc != 0:
-            LOG.error("Failed checking out master for %s", project)
-            LOG.debug(">> %s (stdout)", stdout)
-            LOG.debug(">> %s (stderr)", stderr)
-            return
-        sub_id = review_id[-2:]
-        cmd = [
-            'git', 'fetch', '-q',
-            'https://review.openstack.org/%s' % (project),
-            'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id),
-        ]
-        (rc, stdout, stderr) = run_process(cmd, cwd=code_path)
-        if rc != 0:
-            LOG.error("Failed checking out review for %s/%s",
-                      review_id, change_id)
-            LOG.debug(">> %s (stdout)", stdout)
-            LOG.debug(">> %s (stderr)", stderr)
-            return
-        cmd = [
-            'git', 'checkout', 'FETCH_HEAD',
-        ]
-        (rc, stdout, stderr) = run_process(cmd, cwd=code_path)
-        if rc != 0:
-            LOG.error("Failed fetching review FETCH_HEAD for %s/%s",
-                      review_id, change_id)
-            LOG.debug(">> %s (stdout)", stdout)
-            LOG.debug(">> %s (stderr)", stderr)
-            return
-        details = {}
-        for (key, format) in six.iteritems(DETAILS_GIT):
-            cmd = [
-                'git', 'log', '-n1', '--format=' + format,
-            ]
-            (rc, stdout, stderr) = run_process(cmd, cwd=code_path)
-            if rc == 0:
-                details[key] = stdout.strip()
-            else:
-                LOG.error("Failed running %s", cmd)
-                LOG.debug(">> %s (stdout)", stdout)
-                LOG.debug(">> %s (stderr)", stderr)
-        return details
+            sub_id = review_id[-2:]
+            ref_id = 'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id)
+
+            # The git.remote.fetch method may read in git progress info and
+            # interpret it improperly causing an AssertionError. Because the
+            # data was fetched properly subsequent fetches don't seem to fail.
+            # So try again if an AssertionError is caught.
+            try:
+                remote.fetch(ref_id)
+            except AssertionError:
+                remote.fetch(ref_id)
+            repo.git.checkout("FETCH_HEAD")
+
+            description = ''
+            summary = ''
+            if repo.head.object.message:
+                description = six.text_type(repo.head.object.message)
+                summary = description.splitlines()[0]
+    
+            details = {
+                'summary': summary,
+                'description': description,
+                'committer': six.text_type(repo.head.object.committer),
+                'author': six.text_type(repo.head.object.author),
+            }
+            return details
+        finally:
+            repo.delete_remote(review_id)
+            reset_repo(repo)
 
     def run(self):
         while True:
             (raw_data, ok_cb, reset_cb) = self.work.get(True)
             try:
                 details = self._process(raw_data)
-                if details:
-                    data = copy.deepcopy(raw_data)
-                    data.update(details)
-                    ok_cb(details)
-                else:
-                    reset_cb()
+                data = copy.deepcopy(raw_data)
+                data.update(details)
+                ok_cb(details)
             except Exception:
                 LOG.exception("Failed processing %s", raw_data)
                 reset_cb()

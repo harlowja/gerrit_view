@@ -45,6 +45,8 @@ setup(name='gerrit-view',
           'requests',
           'six',
           'urwid',
+          # Used for czuul detailing mode.
+          'GitPython>=0.3.2.RC1',
       ],
       classifiers=[
         "Development Status :: 4 - Beta",
