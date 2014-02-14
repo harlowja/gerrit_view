@@ -27,6 +27,7 @@ import os
 import shutil
 import sys
 import tempfile
+import thread
 import threading
 
 from six.moves import queue
@@ -77,7 +78,7 @@ REFRESH_KEYS = ('r', 'R')
 
 # Other constants
 GIT_URI_TPL = 'git://git.openstack.org/%(project)s'
-REMOTE_URI_TPL =  'https://review.openstack.org/%(project)s'
+REMOTE_URI_TPL = 'https://review.openstack.org/%(project)s'
 
 
 def select_time_attr(secs):
@@ -140,6 +141,9 @@ def decode_millis(millis):
 
 
 def clone_project(project, code_path):
+    # Create a temporary directory, clone there, then attempt to move to the
+    # main directory, if the move fails, that's ok, but the initial clone
+    # should not.
     tmp_dir = tempfile.mkdtemp()
     try:
         git_uri = GIT_URI_TPL % {'project': project}
@@ -182,7 +186,7 @@ class ReviewFinder(threading.Thread):
         self.options = options
         self.daemon = True
         self.work = queue.Queue()
-        self.code_dir = options.detail_dir
+        self.clone_dir = options.clone_dir
         self.state = 'idle'
 
     def _process(self, raw_data):
@@ -193,15 +197,19 @@ class ReviewFinder(threading.Thread):
             review_id, change_id = review_id.split(",", 1)
         except ValueError:
             pass
-        if not all([review_id, project, change_id]):
-            raise ValueError("Not enough correct inputs values provided")
+        required_inputs = [review_id, project, change_id]
+        if not all(required_inputs):
+            raise ValueError("Missing one of %s, invalid inputs"
+                             % (required_inputs))
 
         LOG.debug("Fetching details for %s - %s/%s",
                   project, review_id, change_id)
-        code_path = os.path.join(self.code_dir, project.strip("/"))
+        path_components = project.strip("/").split("/")
+        code_path = os.path.join(self.clone_dir, *path_components)
         try:
-            if not os.path.isdir(os.path.dirname(code_path)):
-                os.makedirs(os.path.dirname(code_path))
+            base_path = os.path.dirname(code_path)
+            if not os.path.isdir(base_path):
+                os.makedirs(base_path)
         except IOError as e:
             if e.errno != errno.EEXIST:
                 raise
@@ -232,14 +240,13 @@ class ReviewFinder(threading.Thread):
             if repo.head.object.message:
                 description = six.text_type(repo.head.object.message)
                 summary = description.splitlines()[0]
-    
-            details = {
+
+            return {
                 'summary': summary,
                 'description': description,
                 'committer': six.text_type(repo.head.object.committer),
                 'author': six.text_type(repo.head.object.author),
             }
-            return details
         finally:
             repo.delete_remote(review_id)
             reset_repo(repo)
@@ -247,16 +254,17 @@ class ReviewFinder(threading.Thread):
     def run(self):
         while True:
             self.state = 'idle'
-            (raw_data, ok_cb, reset_cb) = self.work.get(True)
+            (r, raw_data) = self.work.get(True)
             self.state = 'active'
             try:
-                details = self._process(raw_data)
-                data = copy.deepcopy(raw_data)
-                data.update(details)
-                ok_cb(details)
+                r.on_details(self._process(raw_data))
+            except KeyboardInterrupt:
+                thread.interrupt_main()
+            except ValueError:
+                r.state = 'ignored'
             except Exception:
                 LOG.exception("Failed processing %s", raw_data)
-                reset_cb()
+                r.state = None
 
 
 class ZuulWatcher(threading.Thread):
@@ -266,7 +274,7 @@ class ZuulWatcher(threading.Thread):
         self.daemon = True
         self.data = {}
         self.event = threading.Event()
-        self._fetches = 0
+        self.fetches = 0
 
     def run(self):
         while True:
@@ -275,7 +283,7 @@ class ZuulWatcher(threading.Thread):
             try:
                 response = requests.get(self.options.server,
                                         timeout=self.options.frequency * 0.66)
-                self._fetches += 1
+                self.fetches += 1
             except requests.RequestException:
                 LOG.exception("Failed fetching zuul data from %s",
                               self.options.server)
@@ -283,14 +291,14 @@ class ZuulWatcher(threading.Thread):
                 try:
                     data = response.json()
                     if isinstance(data, (dict)):
-                        self.data = dict(data)
-                        self.data['__fetched_when'] = datetime.now()
-                        self.data['__fetch_id'] = self._fetches
+                        data['__fetched_when'] = datetime.now()
+                        data['__fetch_id'] = self.fetches
+                        self.data = copy.deepcopy(data)
                     else:
                         raise TypeError("Expected dict type, got '%s'"
                                         % type(data))
                 except (ValueError, TypeError):
-                    LOG.exception("Failed extracting/caching zuul data")
+                    LOG.exception("Failed extracting and caching zuul data")
             self.event.clear()
 
 
@@ -332,7 +340,8 @@ class ZuulReview(urwid.Pile):
         if extra_rows:
             extra_rows.insert(0, urwid.Divider(u'─'))
             extra_rows.append(urwid.Divider(u'─'))
-            self.contents.insert(0, (urwid.Pile(extra_rows), (urwid.WEIGHT, 1)))
+            extra_pile = urwid.Pile(extra_rows)
+            self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
         self.state = 'detailed'
 
     def refresh(self, review):
@@ -583,7 +592,7 @@ class ZuulFrame(urwid.Frame):
     def __init__(self, options, source):
         self.options = options
         self.source = source
-        self.finders = {}
+        self.finders = {}  # these are indexed by project (1 per project)
         screen_count = options.screens
         assert screen_count > 0, "One or more split-screens must be provided!"
         self.screen_count = screen_count
@@ -642,11 +651,8 @@ class ZuulFrame(urwid.Frame):
                         except (KeyError, TypeError):
                             pass
 
-        def state_reset(r):
-            r.state = None
-
         def fire_finder(r, raw_data):
-            if r.state in ('detailed', 'detailing'):
+            if r.state in ('detailed', 'detailing', 'ignored'):
                 return
             if r.project not in self.finders:
                 LOG.debug("Creating finder for project %s", r.project)
@@ -654,12 +660,7 @@ class ZuulFrame(urwid.Frame):
                 self.finders[r.project] = finder
                 finder.start()
             r.state = 'detailing'
-            work_item = [
-                raw_data,
-                r.on_details,
-                functools.partial(state_reset, r),
-            ]
-            self.finders[r.project].work.put(work_item)
+            self.finders[r.project].work.put((r, raw_data))
 
         reviews = {}
         cleaned_pipes = {}
@@ -789,7 +790,7 @@ def main():
     parser.add_option("--details", dest="detail", action='store_true',
                       help="fetch each reviews details"
                            " [default: %default]", default=False)
-    parser.add_option("--detail-dir", dest="detail_dir", action='store',
+    parser.add_option("--detail-dir", dest="clone_dir", action='store',
                       help="store git checkout locations at"
                            " [default: %default]",
                       default=os.path.join(tempfile.gettempdir(), 'czuul'))
@@ -800,8 +801,8 @@ def main():
                                               options.frequency))
 
     if options.detail:
-        if not os.path.isdir(options.detail_dir):
-            os.makedirs(options.detail_dir)
+        if not os.path.isdir(options.clone_dir):
+            os.makedirs(options.clone_dir)
     watcher = ZuulWatcher(options)
     frame = ZuulFrame(options, watcher)
     loop = urwid.MainLoop(frame, PALETTE,
