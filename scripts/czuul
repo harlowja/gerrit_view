@@ -183,6 +183,7 @@ class ReviewFinder(threading.Thread):
         self.daemon = True
         self.work = queue.Queue()
         self.code_dir = options.detail_dir
+        self.state = 'idle'
 
     def _process(self, raw_data):
         project = raw_data.get("project")
@@ -245,7 +246,9 @@ class ReviewFinder(threading.Thread):
 
     def run(self):
         while True:
+            self.state = 'idle'
             (raw_data, ok_cb, reset_cb) = self.work.get(True)
+            self.state = 'active'
             try:
                 details = self._process(raw_data)
                 data = copy.deepcopy(raw_data)
@@ -743,6 +746,8 @@ class ZuulFrame(urwid.Frame):
             work_am = 0
             for (_project, finder) in six.iteritems(self.finders):
                 work_am += finder.work.qsize()
+                if finder.state == 'active':
+                    work_am += 1
             if work_am == 0:
                 text = ''
             else:
