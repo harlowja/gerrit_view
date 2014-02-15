@@ -276,29 +276,37 @@ class ZuulWatcher(threading.Thread):
         self.event = threading.Event()
         self.fetches = 0
 
+    def _fetch(self):
+        response = None
+        try:
+            response = requests.get(self.options.server,
+                                    timeout=self.options.frequency * 0.66)
+            self.fetches += 1
+        except requests.RequestException:
+            LOG.exception("Failed fetching zuul data from %s",
+                          self.options.server)
+        return response
+
+    def _process_response(self, response):
+        if not response:
+            return
+        data = response.json()
+        if isinstance(data, (dict)):
+            data['__fetched_when'] = datetime.now()
+            data['__fetch_id'] = self.fetches
+            self.data = copy.deepcopy(data)
+        else:
+            raise TypeError("Expected dict type, got '%s'" % type(data))
+
     def run(self):
         while True:
             self.event.wait(timeout=self.options.frequency)
-            response = None
             try:
-                response = requests.get(self.options.server,
-                                        timeout=self.options.frequency * 0.66)
-                self.fetches += 1
-            except requests.RequestException:
-                LOG.exception("Failed fetching zuul data from %s",
-                              self.options.server)
-            if response:
-                try:
-                    data = response.json()
-                    if isinstance(data, (dict)):
-                        data['__fetched_when'] = datetime.now()
-                        data['__fetch_id'] = self.fetches
-                        self.data = copy.deepcopy(data)
-                    else:
-                        raise TypeError("Expected dict type, got '%s'"
-                                        % type(data))
-                except (ValueError, TypeError):
-                    LOG.exception("Failed extracting and caching zuul data")
+                self._process_response(self._fetch())
+            except KeyboardInterrupt:
+                thread.interrupt_main()
+            except (ValueError, TypeError):
+                LOG.exception("Failed extracting and caching zuul data")
             self.event.clear()
 
 
