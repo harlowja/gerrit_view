@@ -182,7 +182,7 @@ def get_int_key(k, in_what, default=0):
 
 def clear_extra_remotes(repo):
     try:
-        origin_name = repo.remotes.origin.
+        origin_name = repo.remotes.origin.name
     except AttributeError:
         pass
     else:
