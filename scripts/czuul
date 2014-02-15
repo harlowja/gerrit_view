@@ -206,6 +206,7 @@ class ReviewFinder(threading.Thread):
         self.work = queue.Queue()
         self.clone_dir = options.clone_dir
         self.state = 'idle'
+        self.fetched = 0
 
     def _process(self, raw_data):
         project = raw_data.get("project")
@@ -271,6 +272,7 @@ class ReviewFinder(threading.Thread):
             self.state = 'idle'
             (r, raw_data) = self.work.get(True)
             self.state = 'active'
+            self.fetched += 1
             try:
                 r.on_details(self._process(raw_data))
             except KeyboardInterrupt:
@@ -730,9 +732,10 @@ class ZuulFrame(urwid.Frame):
 
         # Update right footer text
         fetch_id = zuul_data['__fetch_id']
-        text = "%s pipelines (%sr, %sw, %sf)"
+        text = "%s pipelines (%sr, %sw, %sf, %sd)"
         text = text % (len(cleaned_pipes), len(reviews),
-                       len(self.columns.columns), fetch_id)
+                       len(self.columns.columns), fetch_id,
+                       sum([f.fetched for f in six.itervalues(self.finders)]))
         self.right_footer.set_text(text)
 
     def refresh(self, screen, screen_size):
