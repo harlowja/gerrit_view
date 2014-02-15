@@ -180,6 +180,24 @@ def get_int_key(k, in_what, default=0):
         return default
 
 
+def clear_extra_remotes(repo):
+    try:
+        origin_name = repo.remotes.origin.
+    except AttributeError:
+        pass
+    else:
+        deletions = set()
+        for r in repo.remotes:
+            if r.name != origin_name:
+                deletions.add(r.name)
+        for remote_name in deletions:
+            LOG.debug("Deleting remote '%s' from repo %s", remote_name, repo)
+            try:
+                repo.delete_remote(remote_name)
+            except Exception:
+                pass
+
+
 class ReviewFinder(threading.Thread):
     def __init__(self, options):
         super(ReviewFinder, self).__init__()
@@ -218,38 +236,35 @@ class ReviewFinder(threading.Thread):
         else:
             repo = git.Repo(code_path)
 
+        clear_extra_remotes(repo)
         reset_repo(repo)
+
         remote_uri = REMOTE_URI_TPL % {'project': project}
         remote = repo.create_remote(review_id, remote_uri)
+        sub_id = review_id[-2:]
+        ref_id = 'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id)
+
+        # The git.remote.fetch method may read in git progress info and
+        # interpret it improperly causing an AssertionError. Because the
+        # data was fetched properly subsequent fetches don't seem to fail.
+        # So try again if an AssertionError is caught.
         try:
-            sub_id = review_id[-2:]
-            ref_id = 'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id)
+            remote.fetch(ref_id)
+        except AssertionError:
+            remote.fetch(ref_id)
+        repo.git.checkout("FETCH_HEAD")
 
-            # The git.remote.fetch method may read in git progress info and
-            # interpret it improperly causing an AssertionError. Because the
-            # data was fetched properly subsequent fetches don't seem to fail.
-            # So try again if an AssertionError is caught.
-            try:
-                remote.fetch(ref_id)
-            except AssertionError:
-                remote.fetch(ref_id)
-            repo.git.checkout("FETCH_HEAD")
-
-            description = ''
-            summary = ''
-            if repo.head.object.message:
-                description = six.text_type(repo.head.object.message)
-                summary = description.splitlines()[0]
-
-            return {
-                'summary': summary,
-                'description': description,
-                'committer': six.text_type(repo.head.object.committer),
-                'author': six.text_type(repo.head.object.author),
-            }
-        finally:
-            repo.delete_remote(review_id)
-            reset_repo(repo)
+        description = ''
+        summary = ''
+        if repo.head.object.message:
+            description = six.text_type(repo.head.object.message)
+            summary = description.splitlines()[0]
+        return {
+            'summary': summary,
+            'description': description,
+            'committer': six.text_type(repo.head.object.committer),
+            'author': six.text_type(repo.head.object.author),
+        }
 
     def run(self):
         while True:
