@@ -218,6 +218,10 @@ class ReviewFinder(threading.Thread):
         else:
             repo = git.Repo(code_path)
 
+        try:
+            repo.delete_remote(review_id)
+        except Exception:
+            pass
         reset_repo(repo)
         remote_uri = REMOTE_URI_TPL % {'project': project}
         remote = repo.create_remote(review_id, remote_uri)
