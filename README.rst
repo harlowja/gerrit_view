@@ -83,7 +83,6 @@ urwid_, curses_ library and the requests_ library):
 
     $ czuul
     $ czuul -h
-    
     Usage: czuul [options]
     
     Options:
@@ -97,6 +96,9 @@ urwid_, curses_ library and the requests_ library):
       -r SECONDS, --refresh=SECONDS
                             refresh every X seconds [default: 30]
       --project=PROJECT     only show given projects reviews
+      --details             fetch each reviews details [default: False]
+      --detail-dir=CLONE_DIR
+                            store git checkout locations at [default: /tmp/czuul]
 
 ##############
 Keys supported
