@@ -217,7 +217,7 @@ def iter_pipelines(data):
         description = raw_data.get("description", '')
         if not all([name, description]):
             continue
-        p = ZuulPipelineHeader(name, description=description)
+        p = ZuulPipeline(name, description)
         yield (p, raw_data)
 
 
@@ -225,13 +225,12 @@ def iter_reviews(data):
     for q in data.get('change_queues', []):
         for h in q.get('heads', []):
             for raw_data in h:
-                if not all([raw_data.get("id"), raw_data.get("project")]):
+                review_id = raw_data.get("id")
+                project = raw_data.get("project")
+                if not all([review_id, project]):
                     continue
-                try:
-                    r = ZuulReview(raw_data)
-                    yield (r, raw_data)
-                except (KeyError, TypeError):
-                    pass
+                r = ZuulReview(review_id, project, url=raw_data.get('url'))
+                yield (r, raw_data)
 
 
 class ReviewFinder(threading.Thread):
@@ -241,8 +240,13 @@ class ReviewFinder(threading.Thread):
         self.daemon = True
         self.work = queue.PriorityQueue()
         self.clone_dir = options.clone_dir
-        self.state = 'idle'
+        self.processing = None
+        self.lock = threading.Lock()
         self.fetched = 0
+
+    def activity(self):
+        with self.lock:
+            return (self.fetched, self.work.qsize(), self.processing)
 
     def _process(self, r):
         project = r.project
@@ -302,10 +306,12 @@ class ReviewFinder(threading.Thread):
 
     def run(self):
         while True:
-            self.state = 'idle'
-            _p, r = self.work.get(True)
-            self.state = 'active'
-            self.fetched += 1
+            with self.lock:
+                self.processing = None
+            _priority, r = self.work.get(True)
+            with self.lock:
+                self.processing = r.unique_id
+                self.fetched += 1
             try:
                 r.on_details(self._process(r))
             except KeyboardInterrupt:
@@ -313,7 +319,7 @@ class ReviewFinder(threading.Thread):
             except ValueError:
                 r.state = 'ignored'
             except Exception:
-                LOG.exception("Failed processing review: %s", r)
+                LOG.exception("Failed processing review: %s", r.unique_id)
                 r.state = None
 
 
@@ -361,23 +367,22 @@ class ZuulWatcher(threading.Thread):
 
 
 class ZuulReview(urwid.Pile):
-    def __init__(self, review):
+    def __init__(self, review_id, project, url=None):
         super(ZuulReview, self).__init__([])
         try:
-            self.change_id = int(review['id'].split(",", 1)[1].strip())
-            self.review_id = int(review['id'].split(",", 1)[0].strip())
+            self.change_id = int(review_id.split(",", 1)[1].strip())
+            self.review_id = int(review_id.split(",", 1)[0].strip())
         except (TypeError, IndexError, ValueError):
             self.change_id = None
-            self.review_id = review['id']
-        self.unique_id = review['id']
-        self.project = review["project"]
+            self.review_id = review_id
+        self.project = project
         self.jobs = {}
         self.progress_bar = urwid.ProgressBar('normal', 'complete',
                                               0.0, 1.0, 'smooth')
         self.progress_bar.set_completion(0.0)
-        title_pieces = [("title", review['id'])]
-        if review.get("url"):
-            title_pieces.append(("body", " @ %s" % (review['url'])))
+        title_pieces = [("title", review_id)]
+        if url:
+            title_pieces.append(("body", " @ %s" % (url)))
         title = urwid.Text(title_pieces)
         self.eta_text = urwid.Text([('clear', "ETA")], align='right')
         rows = [
@@ -388,8 +393,12 @@ class ZuulReview(urwid.Pile):
             self.contents.append((item, (urwid.WEIGHT, 1)))
         self.state = None
 
-    def __str__(self):
-        return self.unique_id
+    @property
+    def unique_id(self):
+        pieces = [self.review_id]
+        if self.change_id is not None:
+            pieces.append(self.change_id)
+        return ",".join([six.text_type(s) for s in pieces])
 
     def on_details(self, details):
         extra_rows = []
@@ -469,11 +478,12 @@ class ZuulReview(urwid.Pile):
         self.eta_text.set_text(time_markup)
 
 
-class ZuulPipelineHeader(urwid.Pile):
-    def __init__(self, name, description=''):
-        super(ZuulPipelineHeader, self).__init__([])
+class ZuulPipeline(urwid.Pile):
+    def __init__(self, name, description):
+        super(ZuulPipeline, self).__init__([])
         self.name = six.text_type(name)
         title_pieces = [('clear', self.name.title())]
+        self.description = description
         if description:
             description = description[0].lower() + description[1:]
             title_pieces.append(("body", ", %s" % description))
@@ -785,15 +795,17 @@ class ZuulFrame(urwid.Frame):
         text = "Refresh expected in %s seconds..." % (much_longer_secs)
         self.left_footer.set_text(text)
 
-        detailing = 0
+        detail_text = ''
         if self.finder is not None:
-            detailing += self.finder.work.qsize()
-            if self.finder.state == 'active':
-                detailing += 1
-        if detailing > 0:
-            detail_text = "%s reviews waiting to be detailed" % detailing
-        else:
-            detail_text = ''
+            count = 0
+            _fetched, queued, processing = self.finder.activity()
+            count += queued
+            if processing:
+                count += 1
+            if count > 0:
+                detail_text = "%s reviews waiting to be detailed" % count
+                if processing:
+                    detail_text += " (processing %s)" % (processing)
         self.center_footer.set_text(detail_text)
 
 
