@@ -371,8 +371,6 @@ class ZuulReview(urwid.Pile):
             self.review_id = review['id']
         self.unique_id = review['id']
         self.project = review["project"]
-        if not self.project:
-            raise ValueError("Non-empty project expected")
         self.jobs = {}
         self.progress_bar = urwid.ProgressBar('normal', 'complete',
                                               0.0, 1.0, 'smooth')
