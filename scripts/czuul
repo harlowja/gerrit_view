@@ -759,7 +759,7 @@ class ZuulFrame(urwid.Frame):
         fetch_id = zuul_data['__fetch_id']
         detailed = 0
         if self.finder is not None:
-            detailed = self.finder.fetched
+            detailed, _queued, _processing = self.finder.activity()
         text = "%s pipelines (%sr, %sw, %sf, %sd)"
         text = text % (len(pipes), len(reviews),
                        len(self.columns.columns), fetch_id, detailed)
