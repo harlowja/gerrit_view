@@ -180,6 +180,19 @@ def get_int_key(k, in_what, default=0):
         return default
 
 
+def validate_entry(ok_set, entry):
+    if not entry:
+        return False
+    if len(ok_set) == 0:
+        return True
+    for pat in ok_set:
+        if pat == entry:
+            return True
+        if fnmatch.fnmatch(entry, pat):
+            return True
+    return False
+
+
 def clear_extra_remotes(repo):
     try:
         origin_name = repo.remotes.origin.name
@@ -198,24 +211,44 @@ def clear_extra_remotes(repo):
                 pass
 
 
+def iter_pipelines(data):
+    for raw_data in data.get('pipelines', []):
+        name = raw_data.get("name", '')
+        description = raw_data.get("description", '')
+        if not all([name, description]):
+            continue
+        p = ZuulPipelineHeader(name, description=description)
+        yield (p, raw_data)
+
+
+def iter_reviews(data):
+    for q in data.get('change_queues', []):
+        for h in q.get('heads', []):
+            for raw_data in h:
+                if not all([raw_data.get("id"), raw_data.get("project")]):
+                    continue
+                try:
+                    r = ZuulReview(raw_data)
+                    yield (r, raw_data)
+                except (KeyError, TypeError):
+                    pass
+
+
 class ReviewFinder(threading.Thread):
     def __init__(self, options):
         super(ReviewFinder, self).__init__()
         self.options = options
         self.daemon = True
-        self.work = queue.Queue()
+        self.work = queue.PriorityQueue()
         self.clone_dir = options.clone_dir
         self.state = 'idle'
         self.fetched = 0
 
-    def _process(self, raw_data):
-        project = raw_data.get("project")
-        review_id = raw_data.get('id')
-        change_id = None
-        try:
-            review_id, change_id = review_id.split(",", 1)
-        except ValueError:
-            pass
+    def _process(self, r):
+        project = r.project
+        review_id = six.text_type(r.review_id)
+        change_id = r.change_id
+
         required_inputs = [review_id, project, change_id]
         if not all(required_inputs):
             raise ValueError("Missing one of %s, invalid inputs"
@@ -270,17 +303,17 @@ class ReviewFinder(threading.Thread):
     def run(self):
         while True:
             self.state = 'idle'
-            (r, raw_data) = self.work.get(True)
+            _p, r = self.work.get(True)
             self.state = 'active'
             self.fetched += 1
             try:
-                r.on_details(self._process(raw_data))
+                r.on_details(self._process(r))
             except KeyboardInterrupt:
                 thread.interrupt_main()
             except ValueError:
                 r.state = 'ignored'
             except Exception:
-                LOG.exception("Failed processing %s", raw_data)
+                LOG.exception("Failed processing review: %s", r)
                 r.state = None
 
 
@@ -330,12 +363,21 @@ class ZuulWatcher(threading.Thread):
 class ZuulReview(urwid.Pile):
     def __init__(self, review):
         super(ZuulReview, self).__init__([])
-        self.review_id = review['id']
+        try:
+            self.change_id = int(review['id'].split(",", 1)[1].strip())
+            self.review_id = int(review['id'].split(",", 1)[0].strip())
+        except (TypeError, IndexError, ValueError):
+            self.change_id = None
+            self.review_id = review['id']
+        self.unique_id = review['id']
+        self.project = review["project"]
+        if not self.project:
+            raise ValueError("Non-empty project expected")
         self.jobs = {}
         self.progress_bar = urwid.ProgressBar('normal', 'complete',
                                               0.0, 1.0, 'smooth')
         self.progress_bar.set_completion(0.0)
-        title_pieces = [("title", self.review_id)]
+        title_pieces = [("title", review['id'])]
         if review.get("url"):
             title_pieces.append(("body", " @ %s" % (review['url'])))
         title = urwid.Text(title_pieces)
@@ -344,10 +386,12 @@ class ZuulReview(urwid.Pile):
             urwid.Columns([title, (urwid.FIXED, 12, self.eta_text)]),
             self.progress_bar,
         ]
-        self.project = review["project"]
         for item in rows:
             self.contents.append((item, (urwid.WEIGHT, 1)))
         self.state = None
+
+    def __str__(self):
+        return self.unique_id
 
     def on_details(self, details):
         extra_rows = []
@@ -376,7 +420,7 @@ class ZuulReview(urwid.Pile):
         for j in review.get("jobs", []):
             if not j.get("name"):
                 continue
-            j_name = str(j.get('name'))
+            job_name = six.text_type(j.get('name'))
             millis = get_int_key("remaining_time", j)
             remaining_millis.append(millis)
             (secs, mins) = decode_millis(millis)
@@ -388,22 +432,22 @@ class ZuulReview(urwid.Pile):
             else:
                 time_attr = select_time_attr(secs)
             time_txt = format_time(secs, mins) + time_add_on
-            if j_name in self.jobs:
-                (name, remaining) = self.jobs[j_name]
+            if job_name in self.jobs:
+                (name, remaining) = self.jobs[job_name]
                 remaining_txt = remaining.original_widget
                 remaining_txt.set_text(time_txt)
                 remaining.set_attr_map({None: time_attr})
             else:
                 remaining_txt = urwid.Text(time_txt, align='right')
-                self.jobs[j_name] = [
-                    urwid.Text("- %s" % j_name, align='left'),
+                self.jobs[job_name] = [
+                    urwid.Text("- %s" % job_name, align='left'),
                     urwid.AttrMap(remaining_txt, time_attr),
                 ]
-                new_jobs.append(j_name)
+                new_jobs.append(job_name)
         if new_jobs:
             (p_bar, p_bar_options) = self.contents.pop()
-            for j_name in sorted(new_jobs):
-                (name_txt, time_txt) = self.jobs[j_name]
+            for job_name in sorted(new_jobs):
+                (name_txt, time_txt) = self.jobs[job_name]
                 rows = [name_txt, (urwid.WEIGHT, 0.333, time_txt)]
                 self.contents.append((urwid.Columns(rows), (urwid.WEIGHT, 1)))
             self.contents.append((p_bar, p_bar_options))
@@ -430,7 +474,7 @@ class ZuulReview(urwid.Pile):
 class ZuulPipelineHeader(urwid.Pile):
     def __init__(self, name, description=''):
         super(ZuulPipelineHeader, self).__init__([])
-        self.name = str(name)
+        self.name = six.text_type(name)
         title_pieces = [('clear', self.name.title())]
         if description:
             description = description[0].lower() + description[1:]
@@ -442,7 +486,6 @@ class ZuulPipelineHeader(urwid.Pile):
         ]
         for h in rows:
             self.contents.append((h, (urwid.WEIGHT, 1)))
-        self.name = name
 
 
 class CyclingColumns(urwid.Columns):
@@ -617,7 +660,7 @@ class ZuulFrame(urwid.Frame):
     def __init__(self, options, source):
         self.options = options
         self.source = source
-        self.finders = {}  # these are indexed by base project
+        self.finder = None
         screen_count = options.screens
         assert screen_count > 0, "One or more split-screens must be provided!"
         self.screen_count = screen_count
@@ -631,6 +674,10 @@ class ZuulFrame(urwid.Frame):
         self.last_fetch_id = None
         self.columns = self._make_columns(screen_count)
         self.last_reviews = {}
+        self.allowed_projects = set([p.lower()
+                                     for p in self.options.projects if p])
+        self.allowed_pipelines = set([p.lower()
+                                      for p in self.options.pipelines if p])
         super(ZuulFrame, self).__init__(self.columns, footer=footer)
 
     def keypress(self, size, key):
@@ -639,104 +686,75 @@ class ZuulFrame(urwid.Frame):
             return None
         return super(ZuulFrame, self).keypress(size, key)
 
-    def _valid_entry(self, ok_set, entry):
-        if not entry:
-            return False
-        if len(ok_set) == 0:
-            return True
-        for pat in ok_set:
-            if pat == entry:
-                return True
-            if fnmatch.fnmatch(entry, pat):
-                return True
-        return False
-
     def _refresh_pipelines(self, zuul_data, screen_size):
-        maxcol, maxrow = screen_size
-        maxcol = maxcol / self.screen_count
 
-        pipes = {}
-        ok_pipelines = set([p.lower() for p in self.options.pipelines])
-        valid_pipeline = functools.partial(self._valid_entry, ok_pipelines)
-        for p in zuul_data.get('pipelines', []):
-            pipe_name = str(p.get('name', ''))
-            if not valid_pipeline(pipe_name):
-                continue
-            pipes[pipe_name] = str(p.get("description", "")).strip()
-
-        def iter_pipeline(data):
-            for q in data.get('change_queues', []):
-                for h in q.get('heads', []):
-                    for raw_data in h:
-                        if not raw_data.get("id"):
-                            continue
-                        try:
-                            r = ZuulReview(raw_data)
-                            yield (r, raw_data)
-                        except (KeyError, TypeError):
-                            pass
-
-        def fire_finder(r, raw_data):
+        def fire_finder(r):
+            if not self.options.detail:
+                return
             if r.state in ('detailed', 'detailing', 'ignored'):
                 return
-            base_project = r.project.split("/")[0]
-            if base_project not in self.finders:
-                LOG.debug("Creating finder for project %s", base_project)
-                finder = ReviewFinder(self.options)
-                self.finders[base_project] = finder
-                finder.start()
+            if self.finder is None:
+                self.finder = ReviewFinder(self.options)
+                self.finder.start()
             r.state = 'detailing'
-            self.finders[base_project].work.put((r, raw_data))
+            priority = sys.maxint
+            try:
+                priority = -1 * int(r.review_id)
+            except (TypeError, ValueError):
+                pass
+            self.finder.work.put((priority, r))
+
+        maxcol, maxrow = screen_size
+        maxcol = maxcol / self.screen_count
+        pipes = {}
+        valid_pipeline = functools.partial(validate_entry,
+                                           self.allowed_pipelines)
+        for (p, raw_data) in iter_pipelines(zuul_data):
+            if not valid_pipeline(p.name):
+                continue
+            pipes[p.name] = {
+                'pipeline': p,
+                'reviews': [],
+                'data': raw_data,
+            }
 
         reviews = {}
-        cleaned_pipes = {}
-        ordered_pipes = sorted(pipes.keys())
-        ok_projects = set([p.lower() for p in self.options.projects])
-        valid_project = functools.partial(self._valid_entry, ok_projects)
-        for name in ordered_pipes:
-            cleaned_pipes[name] = {
-                'pipeline': ZuulPipelineHeader(name, pipes[name]),
-                'reviews': [],
-            }
-            for p in zuul_data.get('pipelines', []):
-                if p.get('name') == name:
-                    for (r, raw_data) in iter_pipeline(p):
-                        if not valid_project(r.project):
-                            continue
-                        if r.review_id in self.last_reviews:
-                            r = self.last_reviews[r.review_id]
-                        try:
-                            r.refresh(raw_data)
-                            reviews[r.review_id] = r
-                            if self.options.detail:
-                                fire_finder(r, raw_data)
-                            cleaned_pipes[name]['reviews'].append(r.review_id)
-                        except (KeyError, TypeError):
-                            pass
+        valid_project = functools.partial(validate_entry,
+                                          self.allowed_projects)
+        for name in sorted(pipes.keys()):
+            for (r, raw_data) in iter_reviews(pipes[name]['data']):
+                if not valid_project(r.project):
+                    continue
+                if r.unique_id in self.last_reviews:
+                    r = self.last_reviews[r.unique_id]
+                try:
+                    r.refresh(raw_data)
+                except (KeyError, TypeError, ValueError):
+                    pass
+                else:
+                    reviews[r.unique_id] = r
+                    pipes[name]['reviews'].append(r)
 
         def cmp_reviews(r1, r2):
-            try:
-                r1_i = int(r1.split(",", 1)[0])
-                r2_i = int(r2.split(",", 1)[0])
-                return cmp(r1_i, r2_i)
-            except (ValueError, TypeError):
-                return cmp(r1, r2)
+            return cmp((r1.review_id, r1.change_id),
+                       (r2.review_id, r2.change_id))
 
         self.last_reviews = reviews
         self.columns.clear()
-        for name in ordered_pipes:
-            pipeline = cleaned_pipes[name]['pipeline']
-            self.columns.place(pipeline, maxrow, maxcol)
-            ids = sorted(cleaned_pipes[name]['reviews'], cmp=cmp_reviews)
-            for review_id in reversed(ids):
-                self.columns.place(reviews[review_id], maxrow, maxcol)
+        for name in sorted(pipes.keys()):
+            self.columns.place(pipes[name]['pipeline'], maxrow, maxcol)
+            for r in reversed(sorted(pipes[name]['reviews'], cmp=cmp_reviews)):
+                self.columns.place(r, maxrow, maxcol)
+        for r in six.itervalues(reviews):
+            fire_finder(r)
 
-        # Update right footer text
         fetch_id = zuul_data['__fetch_id']
+        detailed = 0
+        if self.finder is not None:
+            detailed = self.finder.fetched
         text = "%s pipelines (%sr, %sw, %sf, %sd)"
-        text = text % (len(cleaned_pipes), len(reviews),
-                       len(self.columns.columns), fetch_id,
-                       sum([f.fetched for f in six.itervalues(self.finders)]))
+        text = text % (len(pipes), len(reviews),
+                       len(self.columns.columns), fetch_id, detailed)
         self.right_footer.set_text(text)
 
     def refresh(self, screen, screen_size):
@@ -764,23 +782,21 @@ class ZuulFrame(urwid.Frame):
             self.last_fetched = fetched_when
             self.last_fetch_id = fetch_id
 
-        # Update left footer text
         much_longer_secs = seconds_left(self.last_fetched,
                                         self.options.frequency)
         text = "Refresh expected in %s seconds..." % (much_longer_secs)
         self.left_footer.set_text(text)
 
-        if self.options.detail:
-            work_am = 0
-            for (_project, finder) in six.iteritems(self.finders):
-                work_am += finder.work.qsize()
-                if finder.state == 'active':
-                    work_am += 1
-            if work_am == 0:
-                text = ''
-            else:
-                text = "%s reviews waiting to be detailed" % work_am
-            self.center_footer.set_text(text)
+        detailing = 0
+        if self.finder is not None:
+            detailing += self.finder.work.qsize()
+            if self.finder.state == 'active':
+                detailing += 1
+        if detailing > 0:
+            detail_text = "%s reviews waiting to be detailed" % detailing
+        else:
+            detail_text = ''
+        self.center_footer.set_text(detail_text)
 
 
 def refresh_zuul(loop, frame):
