@@ -344,7 +344,7 @@ class ZuulReview(urwid.Pile):
             urwid.Columns([title, (urwid.FIXED, 12, self.eta_text)]),
             self.progress_bar,
         ]
-        self.project = review.get("project")
+        self.project = review["project"]
         for item in rows:
             self.contents.append((item, (urwid.WEIGHT, 1)))
         self.state = None
@@ -617,7 +617,7 @@ class ZuulFrame(urwid.Frame):
     def __init__(self, options, source):
         self.options = options
         self.source = source
-        self.finders = {}  # these are indexed by project (1 per project)
+        self.finders = {}  # these are indexed by base project
         screen_count = options.screens
         assert screen_count > 0, "One or more split-screens must be provided!"
         self.screen_count = screen_count
@@ -679,13 +679,14 @@ class ZuulFrame(urwid.Frame):
         def fire_finder(r, raw_data):
             if r.state in ('detailed', 'detailing', 'ignored'):
                 return
-            if r.project not in self.finders:
-                LOG.debug("Creating finder for project %s", r.project)
+            base_project = r.project.split("/")[0]
+            if base_project not in self.finders:
+                LOG.debug("Creating finder for project %s", base_project)
                 finder = ReviewFinder(self.options)
-                self.finders[r.project] = finder
+                self.finders[base_project] = finder
                 finder.start()
             r.state = 'detailing'
-            self.finders[r.project].work.put((r, raw_data))
+            self.finders[base_project].work.put((r, raw_data))
 
         reviews = {}
         cleaned_pipes = {}
