@@ -248,7 +248,7 @@ class ReviewFinder(threading.Thread):
         with self.lock:
             return (self.fetched, self.work.qsize(), self.processing)
 
-    def _process(self, r):
+    def process(self, r):
         project = r.project
         review_id = six.text_type(r.review_id)
         change_id = r.change_id
@@ -313,11 +313,14 @@ class ReviewFinder(threading.Thread):
                 self.processing = r.unique_id
                 self.fetched += 1
             try:
-                r.on_details(self._process(r))
+                details = self.process(r)
+                with r.lock:
+                    r.on_details(details)
             except KeyboardInterrupt:
                 thread.interrupt_main()
             except ValueError:
-                r.state = 'ignored'
+                with r.lock:
+                    r.state = 'ignored'
             except Exception:
                 LOG.exception("Failed processing review: %s", r.unique_id)
                 r.state = None
@@ -392,6 +395,7 @@ class ZuulReview(urwid.Pile):
         for item in rows:
             self.contents.append((item, (urwid.WEIGHT, 1)))
         self.state = None
+        self.lock = threading.Lock()
 
     @property
     def unique_id(self):
@@ -420,11 +424,11 @@ class ZuulReview(urwid.Pile):
             self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
         self.state = 'detailed'
 
-    def refresh(self, review):
+    def refresh(self, raw_data):
         new_jobs = []
         remaining_millis = []
         failure_count = 0
-        for j in review.get("jobs", []):
+        for j in raw_data.get("jobs", []):
             if not j.get("name"):
                 continue
             job_name = six.text_type(j.get('name'))
@@ -458,7 +462,7 @@ class ZuulReview(urwid.Pile):
                 rows = [name_txt, (urwid.WEIGHT, 0.333, time_txt)]
                 self.contents.append((urwid.Columns(rows), (urwid.WEIGHT, 1)))
             self.contents.append((p_bar, p_bar_options))
-        self.progress_bar.set_completion(calculate_completion(review))
+        self.progress_bar.set_completion(calculate_completion(raw_data))
         if remaining_millis:
             max_remaining_millis = max(remaining_millis)
         else:
@@ -699,12 +703,13 @@ class ZuulFrame(urwid.Frame):
         def fire_finder(r):
             if not self.options.detail:
                 return
-            if r.state in ('detailed', 'detailing', 'ignored'):
-                return
+            with r.lock:
+                if r.state in ('detailed', 'detailing', 'ignored'):
+                    return
+                r.state = 'detailing'
             if self.finder is None:
                 self.finder = ReviewFinder(self.options)
                 self.finder.start()
-            r.state = 'detailing'
             priority = sys.maxint
             try:
                 priority = -1 * int(r.review_id)
@@ -736,7 +741,8 @@ class ZuulFrame(urwid.Frame):
                 if r.unique_id in self.last_reviews:
                     r = self.last_reviews[r.unique_id]
                 try:
-                    r.refresh(raw_data)
+                    with r.lock:
+                        r.refresh(raw_data)
                 except (KeyError, TypeError, ValueError):
                     pass
                 else:
