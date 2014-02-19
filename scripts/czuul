@@ -413,12 +413,6 @@ class ZuulReview(urwid.Pile):
             extra_rows.extend([
                 urwid.Text([('title', summary)], align='center'),
             ])
-        author = details.get("author")
-        if author:
-            author = "- %s -" % (author)
-            extra_rows.extend([
-                urwid.Text([('author', author)], align='center'),
-            ])
         if extra_rows:
             extra_rows.insert(0, urwid.Divider(u'─'))
             extra_rows.append(urwid.Divider(u'─'))
