@@ -321,7 +321,8 @@ class Finder(threading.Thread):
         }
 
     def run(self):
-        while True:
+        running = True
+        while running:
             with self.lock:
                 self._processing = None
             _priority, r = self.work.get(True)
@@ -330,9 +331,8 @@ class Finder(threading.Thread):
                 self._processing = "Processing %s" % (r.unique_id)
             try:
                 details = self.process(r)
-                with r.lock:
-                    r.on_details(details)
             except KeyboardInterrupt:
+                running = False
                 thread.interrupt_main()
             except ValueError:
                 with r.lock:
@@ -340,6 +340,9 @@ class Finder(threading.Thread):
             except Exception:
                 LOG.exception("Failed processing review: %s", r.unique_id)
                 r.state = None
+            else:
+                with r.lock:
+                    r.on_details(details)
 
 
 class Watcher(threading.Thread):
@@ -353,10 +356,9 @@ class Watcher(threading.Thread):
         self._fetches = 0
         self._state = None
 
-    @property
-    def state(self):
+    def activity(self):
         with self.lock:
-            return self._state
+            return (self._state, self._fetches)
 
     def fetch(self, url, timeout):
         response = None
@@ -378,16 +380,18 @@ class Watcher(threading.Thread):
             raise TypeError("Expected dict type, got '%s'" % type(data))
 
     def run(self):
+        running = True
         url = self.options.server
         timeout = self.options.frequency * 0.50
-        while True:
+        while running:
             self.event.wait()
-            self._fetches += 1
             with self.lock:
+                self._fetches += 1
                 self._state = "Fetching from %s" % (url)
             try:
                 self.process(self.fetch(url, timeout))
             except KeyboardInterrupt:
+                running = False
                 thread.interrupt_main()
             except (ValueError, TypeError):
                 LOG.exception("Failed extracting data from %s", url)
@@ -678,9 +682,9 @@ class CyclingColumns(urwid.Columns):
         return key
 
 
-class Refresher(threading.Thread):
+class Renderer(threading.Thread):
     def __init__(self, options, finder):
-        super(Refresher, self).__init__()
+        super(Renderer, self).__init__()
         self.finder = finder
         self.options = options
         self.daemon = True
@@ -691,20 +695,19 @@ class Refresher(threading.Thread):
         self.allowed_pipelines = set([p.lower()
                                       for p in self.options.pipelines if p])
 
-    def _refresh(self, zuul_data, screen_size):
+    def _fire_finder(self, r):
+        with r.lock:
+            if r.state in ('detailed', 'detailing', 'ignored'):
+                return
+            r.state = 'detailing'
+        priority = sys.maxint
+        try:
+            priority = -1 * int(r.review_id)
+        except (TypeError, ValueError):
+            pass
+        self.finder.work.put((priority, r))
 
-        def fire_finder(r):
-            with r.lock:
-                if r.state in ('detailed', 'detailing', 'ignored'):
-                    return
-                r.state = 'detailing'
-            priority = sys.maxint
-            try:
-                priority = -1 * int(r.review_id)
-            except (TypeError, ValueError):
-                pass
-            self.finder.work.put((priority, r))
-
+    def render(self, zuul_data, screen_size):
         columns = make_columns(self.options.screens)
         maxcol, maxrow = screen_size
         maxcol = maxcol / self.options.screens
@@ -748,9 +751,6 @@ class Refresher(threading.Thread):
             columns.place(pipes[name]['pipeline'], maxrow, maxcol)
             for r in reversed(sorted(pipes[name]['reviews'], cmp=cmp_reviews)):
                 columns.place(r, maxrow, maxcol)
-        if self.options.detail:
-            for r in six.itervalues(reviews):
-                fire_finder(r)
 
         fetch_id = zuul_data['fetch_count']
         detailed, awaiting, processing = self.finder.activity()
@@ -760,16 +760,21 @@ class Refresher(threading.Thread):
         return (columns, text)
 
     def run(self):
-        while True:
+        running = True
+        while running:
             zuul_data, screen_size, on_finish_cb = self.work.get(True)
             try:
-                columns, right_text = self._refresh(zuul_data, screen_size)
+                columns, right_text = self.render(zuul_data, screen_size)
             except KeyboardInterrupt:
+                running = False
                 thread.interrupt_main()
             except Exception:
-                LOG.exception("Failed refreshing...")
+                LOG.exception("Failed rendering...")
             else:
                 on_finish_cb(columns, right_text)
+                if self.options.detail:
+                    for r in six.itervalues(self.last_reviews):
+                        self._fire_finder(r)
 
 
 class ZuulFrame(urwid.Frame):
@@ -777,7 +782,7 @@ class ZuulFrame(urwid.Frame):
         self.options = options
         self.watcher = Watcher(self.options)
         self.finder = Finder(self.options)
-        self.refresher = Refresher(self.options, self.finder)
+        self.renderer = Renderer(self.options, self.finder)
         self.right_footer = urwid.Text('', align='right')
         self.center_footer = urwid.Text('', align='center')
         self.left_footer = urwid.Text("Initializing...", align='left')
@@ -785,7 +790,7 @@ class ZuulFrame(urwid.Frame):
             urwid.Columns((self.left_footer,
                            self.center_footer, self.right_footer)), 'body')
         self.last_fetch = -1
-        self.refreshing = False
+        self.rendering = False
         self.last_refreshed = None
         self.columns = make_columns(self.options.screens)
         super(ZuulFrame, self).__init__(self.columns, footer=footer)
@@ -802,14 +807,14 @@ class ZuulFrame(urwid.Frame):
 
     def start(self):
         self.watcher.start()
-        self.refresher.start()
+        self.renderer.start()
         if self.options.detail:
             self.finder.start()
 
-    def on_refresh(self, columns, text):
+    def on_render(self, columns, text):
         self.right_footer.set_text(text)
         self.body = columns
-        self.refreshing = False
+        self.rendering = False
 
     def refresh(self, screen, screen_size):
         if screen_size is None or not all(screen_size):
@@ -817,40 +822,38 @@ class ZuulFrame(urwid.Frame):
 
         with self.watcher.lock:
             zuul_data = self.watcher.data
-            state = self.watcher.state
+            watcher_state, fetches = self.watcher.activity()
 
         if not zuul_data:
-            if not state:
+            if not watcher_state:
                 text = "Waiting for initial data..."
                 self._poke_watcher()
             else:
-                text = "%s..." % (state)
+                text = "%s..." % (watcher_state)
             self.left_footer.set_text(text)
             return
 
-        if self.refreshing:
-            text = "Rendering..."
-            self.left_footer.set_text(text)
-        else:
+        text = ''
+        if not self.rendering:
             fetch_id = zuul_data['fetch_count']
             if fetch_id > self.last_fetch:
-                self.refreshing = True
-                self.refresher.work.put((zuul_data,
-                                         screen_size, self.on_refresh))
+                self.rendering = True
+                self.renderer.work.put((zuul_data,
+                                        screen_size, self.on_render))
                 self.last_fetch = fetch_id
                 self.last_refreshed = time.time()
-            if not self.refreshing:
-                if not state:
+            if not self.rendering:
+                if not watcher_state:
                     next_fetch = self.last_refreshed + self.options.frequency
                     refresh_in = int(max(0, next_fetch - time.time()))
                     text = "Refresh expected in %s seconds..." % (refresh_in)
                     if refresh_in <= 0:
                         self._poke_watcher()
                 else:
-                    text = text = "%s..." % (state)
-            else:
-                text = "Rendering..."
-            self.left_footer.set_text(text)
+                    text = text = "%s..." % (watcher_state)
+        if self.rendering:
+            text = "Rendering..."
+        self.left_footer.set_text(text)
 
         text = ""
         fetched, awaiting, processing = self.finder.activity()
