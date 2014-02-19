@@ -239,14 +239,13 @@ class ReviewFinder(threading.Thread):
         self.options = options
         self.daemon = True
         self.work = queue.PriorityQueue()
-        self.clone_dir = options.clone_dir
-        self.processing = None
         self.lock = threading.Lock()
-        self.fetched = 0
+        self._fetched = 0
+        self._processing = None
 
     def activity(self):
         with self.lock:
-            return (self.fetched, self.work.qsize(), self.processing)
+            return (self._fetched, self.work.qsize(), self._processing)
 
     def process(self, r):
         project = r.project
@@ -261,7 +260,7 @@ class ReviewFinder(threading.Thread):
         LOG.debug("Fetching details for %s - %s/%s",
                   project, review_id, change_id)
         path_components = project.strip("/").split("/")
-        code_path = os.path.join(self.clone_dir, *path_components)
+        code_path = os.path.join(self.options.clone_dir, *path_components)
         try:
             base_path = os.path.dirname(code_path)
             if not os.path.isdir(base_path):
@@ -310,8 +309,8 @@ class ReviewFinder(threading.Thread):
                 self.processing = None
             _priority, r = self.work.get(True)
             with self.lock:
-                self.processing = r.unique_id
-                self.fetched += 1
+                self._processing = r.unique_id
+                self._fetched += 1
             try:
                 details = self.process(r)
                 with r.lock:
