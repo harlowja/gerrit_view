@@ -333,14 +333,15 @@ class ZuulWatcher(threading.Thread):
         self.daemon = True
         self.data = {}
         self.event = threading.Event()
-        self.fetches = 0
+        self.lock = threading.Lock()
+        self._fetches = 0
 
     def _fetch(self):
         response = None
         try:
             response = requests.get(self.options.server,
                                     timeout=self.options.frequency * 0.66)
-            self.fetches += 1
+            self._fetches += 1
         except requests.RequestException:
             LOG.exception("Failed fetching zuul data from %s",
                           self.options.server)
@@ -351,9 +352,10 @@ class ZuulWatcher(threading.Thread):
             return
         data = response.json()
         if isinstance(data, (dict)):
-            data['__fetched_when'] = datetime.now()
-            data['__fetch_id'] = self.fetches
-            self.data = copy.deepcopy(data)
+            with self.lock:
+                data['fetched_when'] = datetime.now()
+                data['fetch_count'] = int(self._fetches)
+                self.data = copy.deepcopy(data)
         else:
             raise TypeError("Expected dict type, got '%s'" % type(data))
 
@@ -682,8 +684,7 @@ class ZuulFrame(urwid.Frame):
         footer = urwid.AttrWrap(
             urwid.Columns((self.left_footer,
                            self.center_footer, self.right_footer)), 'body')
-        self.last_fetched = None
-        self.last_fetch_id = None
+        self.last_fetched = (None, -1)
         self.columns = self._make_columns(screen_count)
         self.last_reviews = {}
         self.allowed_projects = set([p.lower()
@@ -760,8 +761,8 @@ class ZuulFrame(urwid.Frame):
             if not self.finder.is_alive():
                 self.finder.start()
 
-        fetch_id = zuul_data['__fetch_id']
-        detailed, _queued, _processing = self.finder.activity()
+        fetch_id = zuul_data['fetch_count']
+        detailed, awaiting, processing = self.finder.activity()
         text = "%s pipelines (%sr, %sw, %sf, %sd)"
         text = text % (len(pipes), len(reviews),
                        len(self.columns.columns), fetch_id, detailed)
@@ -771,7 +772,8 @@ class ZuulFrame(urwid.Frame):
         if screen_size is None or not all(screen_size):
             return
 
-        zuul_data = copy.deepcopy(self.source.data)
+        with self.source.lock:
+            zuul_data = copy.deepcopy(self.source.data)
         if not zuul_data:
             self.source.event.set()
             self.left_footer.set_text("Waiting for initial data...")
@@ -783,14 +785,14 @@ class ZuulFrame(urwid.Frame):
             if much_longer_secs <= 0:
                 self.source.event.set()
 
-        fetched_when = zuul_data['__fetched_when']
-        fetch_id = zuul_data['__fetch_id']
+        fetched_when = zuul_data['fetched_when']
         poke(fetched_when)
 
-        if self.last_fetch_id != fetch_id:
+        fetch_id = zuul_data['fetch_count']
+        last_fetched, last_fetch_id = self.last_fetched
+        if fetch_id != last_fetch_id:
             self._refresh_pipelines(zuul_data, screen_size)
-            self.last_fetched = fetched_when
-            self.last_fetch_id = fetch_id
+            self.last_fetched = (fetched_when, fetch_id)
 
         much_longer_secs = seconds_left(self.last_fetched,
                                         self.options.frequency)
