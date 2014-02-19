@@ -779,23 +779,19 @@ class ZuulFrame(urwid.Frame):
             self.left_footer.set_text("Waiting for initial data...")
             return
 
-        def poke(fetched_when):
-            much_longer_secs = seconds_left(fetched_when,
-                                            self.options.frequency)
-            if much_longer_secs <= 0:
-                self.source.event.set()
-
         fetched_when = zuul_data['fetched_when']
-        poke(fetched_when)
+        much_longer_secs = seconds_left(fetched_when, self.options.frequency)
+        if much_longer_secs <= 0:
+            self.source.event.set()
 
         fetch_id = zuul_data['fetch_count']
         last_fetched, last_fetch_id = self.last_fetched
         if fetch_id != last_fetch_id:
             self._refresh_pipelines(zuul_data, screen_size)
             self.last_fetched = (fetched_when, fetch_id)
+            last_fetched, last_fetch_id = self.last_fetched
 
-        much_longer_secs = seconds_left(self.last_fetched,
-                                        self.options.frequency)
+        much_longer_secs = seconds_left(last_fetched, self.options.frequency)
         text = "Refresh expected in %s seconds..." % (much_longer_secs)
         self.left_footer.set_text(text)
 
