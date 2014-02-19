@@ -672,7 +672,7 @@ class ZuulFrame(urwid.Frame):
     def __init__(self, options, source):
         self.options = options
         self.source = source
-        self.finder = None
+        self.finder = ReviewFinder(self.options)
         screen_count = options.screens
         assert screen_count > 0, "One or more split-screens must be provided!"
         self.screen_count = screen_count
@@ -701,15 +701,10 @@ class ZuulFrame(urwid.Frame):
     def _refresh_pipelines(self, zuul_data, screen_size):
 
         def fire_finder(r):
-            if not self.options.detail:
-                return
             with r.lock:
                 if r.state in ('detailed', 'detailing', 'ignored'):
                     return
                 r.state = 'detailing'
-            if self.finder is None:
-                self.finder = ReviewFinder(self.options)
-                self.finder.start()
             priority = sys.maxint
             try:
                 priority = -1 * int(r.review_id)
@@ -759,13 +754,14 @@ class ZuulFrame(urwid.Frame):
             self.columns.place(pipes[name]['pipeline'], maxrow, maxcol)
             for r in reversed(sorted(pipes[name]['reviews'], cmp=cmp_reviews)):
                 self.columns.place(r, maxrow, maxcol)
-        for r in six.itervalues(reviews):
-            fire_finder(r)
+        if self.options.detail:
+            for r in six.itervalues(reviews):
+                fire_finder(r)
+            if not self.finder.is_alive():
+                self.finder.start()
 
         fetch_id = zuul_data['__fetch_id']
-        detailed = 0
-        if self.finder is not None:
-            detailed, _queued, _processing = self.finder.activity()
+        detailed, _queued, _processing = self.finder.activity()
         text = "%s pipelines (%sr, %sw, %sf, %sd)"
         text = text % (len(pipes), len(reviews),
                        len(self.columns.columns), fetch_id, detailed)
@@ -775,7 +771,7 @@ class ZuulFrame(urwid.Frame):
         if screen_size is None or not all(screen_size):
             return
 
-        zuul_data = dict(self.source.data)
+        zuul_data = copy.deepcopy(self.source.data)
         if not zuul_data:
             self.source.event.set()
             self.left_footer.set_text("Waiting for initial data...")
@@ -801,18 +797,16 @@ class ZuulFrame(urwid.Frame):
         text = "Refresh expected in %s seconds..." % (much_longer_secs)
         self.left_footer.set_text(text)
 
-        detail_text = ''
-        if self.finder is not None:
-            count = 0
-            _fetched, queued, processing = self.finder.activity()
-            count += queued
-            if processing:
-                count += 1
-            if count > 0:
-                detail_text = "%s reviews waiting to be detailed" % count
+        if self.options.detail:
+            details = six.StringIO()
+            fetched, awaiting, processing = self.finder.activity()
+            active_count = int(bool(processing)) + awaiting
+            if active_count > 0:
+                details.write("%s reviews waiting to be "
+                              "detailed" % active_count)
                 if processing:
-                    detail_text += " (processing %s)" % (processing)
-        self.center_footer.set_text(detail_text)
+                    details.write(" (processing %s)" % (processing))
+            self.center_footer.set_text(details.getvalue())
 
 
 def refresh_zuul(loop, frame):
