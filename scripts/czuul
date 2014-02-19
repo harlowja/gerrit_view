@@ -17,6 +17,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import contextlib
 import copy
 import errno
 import fnmatch
@@ -79,6 +80,18 @@ REFRESH_KEYS = ('r', 'R')
 # Other constants
 GIT_URI_TPL = 'git://git.openstack.org/%(project)s'
 REMOTE_URI_TPL = 'https://review.openstack.org/%(project)s'
+
+
+@contextlib.contextmanager
+def temp_dir(**kwargs):
+    d = tempfile.mkdtemp(**kwargs)
+    try:
+        yield d
+    finally:
+        try:
+            shutil.rmtree(d)
+        except Exception:
+            LOG.exception("Failed deleting temporary directory %s", d)
 
 
 def select_time_attr(secs):
@@ -144,10 +157,9 @@ def clone_project(project, code_path):
     # Create a temporary directory, clone there, then attempt to move to the
     # main directory, if the move fails, that's ok, but the initial clone
     # should not.
-    tmp_dir = tempfile.mkdtemp()
-    try:
+    with temp_dir() as tmp_d:
         git_uri = GIT_URI_TPL % {'project': project}
-        repo_path = os.path.join(tmp_dir, os.path.basename(project))
+        repo_path = os.path.join(tmp_d, os.path.basename(project))
         os.makedirs(repo_path)
         repo = git.Repo.clone_from(git_uri, repo_path)
         try:
@@ -156,8 +168,6 @@ def clone_project(project, code_path):
             if e.errno != errno.EEXIST:
                 raise
         return git.Repo(code_path)
-    finally:
-        shutil.rmtree(tmp_dir)
 
 
 def reset_repo(repo):
