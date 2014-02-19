@@ -793,6 +793,7 @@ class ZuulFrame(urwid.Frame):
         self.rendering = False
         self.last_refreshed = None
         self.columns = make_columns(self.options.screens)
+        self.lock = threading.RLock()
         super(ZuulFrame, self).__init__(self.columns, footer=footer)
 
     def keypress(self, size, key):
@@ -806,20 +807,25 @@ class ZuulFrame(urwid.Frame):
         self.watcher.event.set()
 
     def start(self):
-        self.watcher.start()
-        self.renderer.start()
-        if self.options.detail:
-            self.finder.start()
+        with self.lock:
+            self.watcher.start()
+            self.renderer.start()
+            if self.options.detail:
+                self.finder.start()
 
     def on_render(self, columns, text):
-        self.right_footer.set_text(text)
-        self.body = columns
-        self.rendering = False
+        with self.lock:
+            self.right_footer.set_text(text)
+            self.body = columns
+            self.rendering = False
 
     def refresh(self, screen, screen_size):
         if screen_size is None or not all(screen_size):
             return
+        with self.lock:
+            self._refresh(screen, screen_size)
 
+    def _refresh(self, screen, screen_size):
         with self.watcher.lock:
             zuul_data = self.watcher.data
             watcher_state, fetches = self.watcher.activity()
