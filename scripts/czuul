@@ -18,7 +18,6 @@
 #    under the License.
 
 import contextlib
-import copy
 import errno
 import fnmatch
 import functools
@@ -30,6 +29,7 @@ import sys
 import tempfile
 import thread
 import threading
+import time
 
 from six.moves import queue
 
@@ -37,8 +37,6 @@ import git
 import requests
 import six
 import urwid
-
-from datetime import (datetime, timedelta)
 
 logging.basicConfig(level=logging.ERROR,
                     format='%(asctime)s %(levelname)s: %(message)s',
@@ -103,15 +101,6 @@ def select_time_attr(secs):
     if secs <= 1800:
         return 'veryslow'
     return 'superslow'
-
-
-def seconds_left(expiry_date, expires_in_secs):
-    now = datetime.now()
-    expires_on = expiry_date + timedelta(seconds=max(0, int(expires_in_secs)))
-    much_longer = expires_on - now
-    if much_longer.seconds <= 0 or expires_on <= now:
-        return 0
-    return int(much_longer.seconds)
 
 
 def format_time(secs, mins, only_mins=False):
@@ -243,9 +232,21 @@ def iter_reviews(data):
                 yield (r, raw_data)
 
 
-class ReviewFinder(threading.Thread):
+def make_columns(column_count):
+
+    def column_maker():
+        c = urwid.Pile([])
+        w = urwid.ListBox(urwid.SimpleFocusListWalker([c]))
+        w = urwid.AttrWrap(w, 'body')
+        w = urwid.AttrMap(urwid.LineBox(w), 'selected', 'body')
+        return (c, w)
+
+    return CyclingColumns(column_maker, column_count)
+
+
+class Finder(threading.Thread):
     def __init__(self, options):
-        super(ReviewFinder, self).__init__()
+        super(Finder, self).__init__()
         self.options = options
         self.daemon = True
         self.work = queue.PriorityQueue()
@@ -279,7 +280,8 @@ class ReviewFinder(threading.Thread):
             if e.errno != errno.EEXIST:
                 raise
         if not os.path.exists(code_path):
-            self._set_processing("Cloning %s for %s" % (project, r.unique_id))
+            with self.lock:
+                self._processing = "Cloning %s for %s" % (project, r.unique_id)
             repo = clone_project(project, code_path)
         else:
             repo = git.Repo(code_path)
@@ -296,14 +298,16 @@ class ReviewFinder(threading.Thread):
         # interpret it improperly causing an AssertionError. Because the
         # data was fetched properly subsequent fetches don't seem to fail.
         # So try again if an AssertionError is caught.
-        self._set_processing("Fetching remote for %s" % (r.unique_id))
+        with self.lock:
+            self._processing = "Fetching remote for %s" % (r.unique_id)
         try:
             remote.fetch(ref_id)
         except AssertionError:
             remote.fetch(ref_id)
         repo.git.checkout("FETCH_HEAD")
 
-        self._set_processing("Detailing %s" % (r.unique_id))
+        with self.lock:
+            self._processing = "Detailing %s" % (r.unique_id)
         description = ''
         summary = ''
         if repo.head.object.message:
@@ -316,17 +320,14 @@ class ReviewFinder(threading.Thread):
             'author': six.text_type(repo.head.object.author),
         }
 
-    def _set_processing(self, processing):
-        with self.lock:
-            self._processing = processing
-
     def run(self):
         while True:
-            self._set_processing(None)
+            with self.lock:
+                self._processing = None
             _priority, r = self.work.get(True)
             with self.lock:
                 self._fetched += 1
-                self._set_processing("Processing %s" % (r.unique_id))
+                self._processing = "Processing %s" % (r.unique_id)
             try:
                 details = self.process(r)
                 with r.lock:
@@ -341,49 +342,59 @@ class ReviewFinder(threading.Thread):
                 r.state = None
 
 
-class ZuulWatcher(threading.Thread):
+class Watcher(threading.Thread):
     def __init__(self, options):
-        super(ZuulWatcher, self).__init__()
+        super(Watcher, self).__init__()
         self.options = options
         self.daemon = True
         self.data = {}
         self.event = threading.Event()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self._fetches = 0
+        self._state = None
 
-    def _fetch(self):
+    @property
+    def state(self):
+        with self.lock:
+            return self._state
+
+    def fetch(self, url, timeout):
         response = None
         try:
-            response = requests.get(self.options.server,
-                                    timeout=self.options.frequency * 0.66)
-            self._fetches += 1
+            response = requests.get(url, timeout=timeout)
         except requests.RequestException:
-            LOG.exception("Failed fetching zuul data from %s",
-                          self.options.server)
+            LOG.exception("Failed fetching zuul data from %s", url)
         return response
 
-    def _process_response(self, response):
+    def process(self, response):
         if not response:
             return
         data = response.json()
-        if isinstance(data, (dict)):
+        if isinstance(data, dict):
             with self.lock:
-                data['fetched_when'] = datetime.now()
-                data['fetch_count'] = int(self._fetches)
-                self.data = copy.deepcopy(data)
+                data['fetch_count'] = self._fetches
+                self.data = data
         else:
             raise TypeError("Expected dict type, got '%s'" % type(data))
 
     def run(self):
+        url = self.options.server
+        timeout = self.options.frequency * 0.50
         while True:
-            self.event.wait(timeout=self.options.frequency)
+            self.event.wait()
+            self._fetches += 1
+            with self.lock:
+                self._state = "Fetching from %s" % (url)
             try:
-                self._process_response(self._fetch())
+                self.process(self.fetch(url, timeout))
             except KeyboardInterrupt:
                 thread.interrupt_main()
             except (ValueError, TypeError):
-                LOG.exception("Failed extracting and caching zuul data")
-            self.event.clear()
+                LOG.exception("Failed extracting data from %s", url)
+            finally:
+                self.event.clear()
+                with self.lock:
+                    self._state = None
 
 
 class ZuulReview(urwid.Pile):
@@ -412,7 +423,7 @@ class ZuulReview(urwid.Pile):
         for item in rows:
             self.contents.append((item, (urwid.WEIGHT, 1)))
         self.state = None
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
     @property
     def unique_id(self):
@@ -667,48 +678,20 @@ class CyclingColumns(urwid.Columns):
         return key
 
 
-class ZuulFrame(urwid.Frame):
-    @staticmethod
-    def _make_columns(column_count):
-
-        def column_maker():
-            c = urwid.Pile([])
-            w = urwid.ListBox(urwid.SimpleFocusListWalker([c]))
-            w = urwid.AttrWrap(w, 'body')
-            w = urwid.AttrMap(urwid.LineBox(w), 'selected', 'body')
-            return (c, w)
-
-        return CyclingColumns(column_maker, column_count)
-
-    def __init__(self, options, source):
+class Refresher(threading.Thread):
+    def __init__(self, options, finder):
+        super(Refresher, self).__init__()
+        self.finder = finder
         self.options = options
-        self.source = source
-        self.finder = ReviewFinder(self.options)
-        screen_count = options.screens
-        assert screen_count > 0, "One or more split-screens must be provided!"
-        self.screen_count = screen_count
-        self.right_footer = urwid.Text('', align='right')
-        self.center_footer = urwid.Text('', align='center')
-        self.left_footer = urwid.Text("Initializing...", align='left')
-        footer = urwid.AttrWrap(
-            urwid.Columns((self.left_footer,
-                           self.center_footer, self.right_footer)), 'body')
-        self.last_fetched = (None, -1)
-        self.columns = self._make_columns(screen_count)
+        self.daemon = True
+        self.work = queue.Queue()
         self.last_reviews = {}
         self.allowed_projects = set([p.lower()
                                      for p in self.options.projects if p])
         self.allowed_pipelines = set([p.lower()
                                       for p in self.options.pipelines if p])
-        super(ZuulFrame, self).__init__(self.columns, footer=footer)
 
-    def keypress(self, size, key):
-        if key in REFRESH_KEYS:
-            self.source.event.set()
-            return None
-        return super(ZuulFrame, self).keypress(size, key)
-
-    def _refresh_pipelines(self, zuul_data, screen_size):
+    def _refresh(self, zuul_data, screen_size):
 
         def fire_finder(r):
             with r.lock:
@@ -722,8 +705,9 @@ class ZuulFrame(urwid.Frame):
                 pass
             self.finder.work.put((priority, r))
 
+        columns = make_columns(self.options.screens)
         maxcol, maxrow = screen_size
-        maxcol = maxcol / self.screen_count
+        maxcol = maxcol / self.options.screens
         pipes = {}
         valid_pipeline = functools.partial(validate_entry,
                                            self.allowed_pipelines)
@@ -759,52 +743,114 @@ class ZuulFrame(urwid.Frame):
                        (r2.review_id, r2.change_id))
 
         self.last_reviews = reviews
-        self.columns.clear()
+        columns.clear()
         for name in sorted(pipes.keys()):
-            self.columns.place(pipes[name]['pipeline'], maxrow, maxcol)
+            columns.place(pipes[name]['pipeline'], maxrow, maxcol)
             for r in reversed(sorted(pipes[name]['reviews'], cmp=cmp_reviews)):
-                self.columns.place(r, maxrow, maxcol)
+                columns.place(r, maxrow, maxcol)
         if self.options.detail:
             for r in six.itervalues(reviews):
                 fire_finder(r)
-            if not self.finder.is_alive():
-                self.finder.start()
 
         fetch_id = zuul_data['fetch_count']
         detailed, awaiting, processing = self.finder.activity()
         text = "%s pipelines (%sr, %sw, %sf, %sd)"
         text = text % (len(pipes), len(reviews),
-                       len(self.columns.columns), fetch_id, detailed)
+                       len(columns.columns), fetch_id, detailed)
+        return (columns, text)
+
+    def run(self):
+        while True:
+            zuul_data, screen_size, on_finish_cb = self.work.get(True)
+            try:
+                columns, right_text = self._refresh(zuul_data, screen_size)
+            except KeyboardInterrupt:
+                thread.interrupt_main()
+            except Exception:
+                LOG.exception("Failed refreshing...")
+            else:
+                on_finish_cb(columns, right_text)
+
+
+class ZuulFrame(urwid.Frame):
+    def __init__(self, options):
+        self.options = options
+        self.watcher = Watcher(self.options)
+        self.finder = Finder(self.options)
+        self.refresher = Refresher(self.options, self.finder)
+        self.right_footer = urwid.Text('', align='right')
+        self.center_footer = urwid.Text('', align='center')
+        self.left_footer = urwid.Text("Initializing...", align='left')
+        footer = urwid.AttrWrap(
+            urwid.Columns((self.left_footer,
+                           self.center_footer, self.right_footer)), 'body')
+        self.last_fetch = -1
+        self.refreshing = False
+        self.last_refreshed = None
+        self.columns = make_columns(self.options.screens)
+        super(ZuulFrame, self).__init__(self.columns, footer=footer)
+
+    def keypress(self, size, key):
+        if key in REFRESH_KEYS:
+            self._poke_watcher()
+            return None
+        return super(ZuulFrame, self).keypress(size, key)
+
+    def _poke_watcher(self):
+        LOG.debug("Poking")
+        self.watcher.event.set()
+
+    def start(self):
+        self.watcher.start()
+        self.refresher.start()
+        if self.options.detail:
+            self.finder.start()
+
+    def on_refresh(self, columns, text):
         self.right_footer.set_text(text)
+        self.body = columns
+        self.refreshing = False
 
     def refresh(self, screen, screen_size):
         if screen_size is None or not all(screen_size):
             return
 
-        with self.source.lock:
-            zuul_data = copy.deepcopy(self.source.data)
+        with self.watcher.lock:
+            zuul_data = self.watcher.data
+            state = self.watcher.state
+
         if not zuul_data:
-            if not self.source.event.is_set():
-                self.source.event.set()
-            self.left_footer.set_text("Waiting for initial data...")
+            if not state:
+                text = "Waiting for initial data..."
+                self._poke_watcher()
+            else:
+                text = "%s..." % (state)
+            self.left_footer.set_text(text)
             return
 
-        fetched_when = zuul_data['fetched_when']
-        much_longer_secs = seconds_left(fetched_when, self.options.frequency)
-        if much_longer_secs <= 0:
-            if not self.source.event.is_set():
-                self.source.event.set()
-
-        fetch_id = zuul_data['fetch_count']
-        last_fetched, last_fetch_id = self.last_fetched
-        if fetch_id != last_fetch_id:
-            self._refresh_pipelines(zuul_data, screen_size)
-            self.last_fetched = (fetched_when, fetch_id)
-            last_fetched, last_fetch_id = self.last_fetched
-
-        much_longer_secs = seconds_left(last_fetched, self.options.frequency)
-        text = "Refresh expected in %s seconds..." % (much_longer_secs)
-        self.left_footer.set_text(text)
+        if self.refreshing:
+            text = "Rendering..."
+            self.left_footer.set_text(text)
+        else:
+            fetch_id = zuul_data['fetch_count']
+            if fetch_id > self.last_fetch:
+                self.refreshing = True
+                self.refresher.work.put((zuul_data,
+                                         screen_size, self.on_refresh))
+                self.last_fetch = fetch_id
+                self.last_refreshed = time.time()
+            if not self.refreshing:
+                if not state:
+                    next_fetch = self.last_refreshed + self.options.frequency
+                    refresh_in = int(max(0, next_fetch - time.time()))
+                    text = "Refresh expected in %s seconds..." % (refresh_in)
+                    if refresh_in <= 0:
+                        self._poke_watcher()
+                else:
+                    text = text = "%s..." % (state)
+            else:
+                text = "Rendering..."
+            self.left_footer.set_text(text)
 
         text = ""
         fetched, awaiting, processing = self.finder.activity()
@@ -859,16 +905,17 @@ def main():
         parser.error("poll frequency must be greater or equal to %s seconds"
                      " and not %s seconds" % (ZUUL_MIN_FREQ,
                                               options.frequency))
+    if options.screens <= 0:
+        parser.error("one or more split-screens must be provided")
 
     if options.detail:
         if not os.path.isdir(options.clone_dir):
             os.makedirs(options.clone_dir)
-    watcher = ZuulWatcher(options)
-    frame = ZuulFrame(options, watcher)
+    frame = ZuulFrame(options)
+    frame.start()
     loop = urwid.MainLoop(frame, PALETTE,
                           handle_mouse=False,
                           unhandled_input=on_unhandled_input)
-    watcher.start()
     loop.event_loop.enter_idle(functools.partial(on_idle, loop, frame))
     loop.run()
 
