@@ -784,14 +784,16 @@ class ZuulFrame(urwid.Frame):
         with self.source.lock:
             zuul_data = copy.deepcopy(self.source.data)
         if not zuul_data:
-            self.source.event.set()
+            if not self.source.event.is_set():
+                self.source.event.set()
             self.left_footer.set_text("Waiting for initial data...")
             return
 
         fetched_when = zuul_data['fetched_when']
         much_longer_secs = seconds_left(fetched_when, self.options.frequency)
         if much_longer_secs <= 0:
-            self.source.event.set()
+            if not self.source.event.is_set():
+                self.source.event.set()
 
         fetch_id = zuul_data['fetch_count']
         last_fetched, last_fetch_id = self.last_fetched
@@ -804,16 +806,14 @@ class ZuulFrame(urwid.Frame):
         text = "Refresh expected in %s seconds..." % (much_longer_secs)
         self.left_footer.set_text(text)
 
-        if self.options.detail:
-            details = six.StringIO()
-            fetched, awaiting, processing = self.finder.activity()
-            active_count = int(bool(processing)) + awaiting
-            if active_count > 0:
-                details.write("%s reviews waiting to be "
-                              "detailed" % active_count)
-                if processing:
-                    details.write("\n- %s -" % (processing))
-            self.center_footer.set_text(details.getvalue())
+        text = ""
+        fetched, awaiting, processing = self.finder.activity()
+        active_count = int(bool(processing)) + awaiting
+        if active_count > 0:
+            text += "%s reviews waiting to be detailed" % (active_count)
+            if processing:
+                text += "\n- %s -" % (processing)
+        self.center_footer.set_text(text)
 
 
 def refresh_zuul(loop, frame):
