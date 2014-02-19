@@ -239,7 +239,7 @@ class ReviewFinder(threading.Thread):
         self.options = options
         self.daemon = True
         self.work = queue.PriorityQueue()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self._fetched = 0
         self._processing = None
 
@@ -269,6 +269,7 @@ class ReviewFinder(threading.Thread):
             if e.errno != errno.EEXIST:
                 raise
         if not os.path.exists(code_path):
+            self._set_processing("Cloning %s for %s" % (project, r.unique_id))
             repo = clone_project(project, code_path)
         else:
             repo = git.Repo(code_path)
@@ -285,12 +286,14 @@ class ReviewFinder(threading.Thread):
         # interpret it improperly causing an AssertionError. Because the
         # data was fetched properly subsequent fetches don't seem to fail.
         # So try again if an AssertionError is caught.
+        self._set_processing("Fetching remote for %s" % (r.unique_id))
         try:
             remote.fetch(ref_id)
         except AssertionError:
             remote.fetch(ref_id)
         repo.git.checkout("FETCH_HEAD")
 
+        self._set_processing("Detailing %s" % (r.unique_id))
         description = ''
         summary = ''
         if repo.head.object.message:
@@ -303,14 +306,17 @@ class ReviewFinder(threading.Thread):
             'author': six.text_type(repo.head.object.author),
         }
 
+    def _set_processing(self, processing):
+        with self.lock:
+            self._processing = processing
+
     def run(self):
         while True:
-            with self.lock:
-                self.processing = None
+            self._set_processing(None)
             _priority, r = self.work.get(True)
             with self.lock:
-                self._processing = r.unique_id
                 self._fetched += 1
+                self._set_processing("Processing %s" % (r.unique_id))
             try:
                 details = self.process(r)
                 with r.lock:
@@ -796,7 +802,7 @@ class ZuulFrame(urwid.Frame):
                 details.write("%s reviews waiting to be "
                               "detailed" % active_count)
                 if processing:
-                    details.write(" (processing %s)" % (processing))
+                    details.write("\n- %s -" % (processing))
             self.center_footer.set_text(details.getvalue())
 
 
