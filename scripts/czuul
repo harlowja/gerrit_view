@@ -447,22 +447,24 @@ class ZuulReview(urwid.Pile):
         return ",".join([six.text_type(s) for s in pieces])
 
     def on_details(self, details):
-        extra_rows = []
-        summary = details.get("summary")
-        if summary:
-            extra_rows.extend([
-                urwid.Text([('title', summary)], align='center'),
-            ])
-        if extra_rows:
-            extra_rows.insert(0, urwid.Divider(u'─'))
-            extra_rows.append(urwid.Divider(u'─'))
-            extra_pile = urwid.Pile(extra_rows)
-            self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
-        self.state = 'detailed'
+        with self.lock:
+            extra_rows = []
+            summary = details.get("summary")
+            if summary:
+                extra_rows.extend([
+                    urwid.Text([('title', summary)], align='center'),
+                ])
+            if extra_rows:
+                extra_rows.insert(0, urwid.Divider(u'─'))
+                extra_rows.append(urwid.Divider(u'─'))
+                extra_pile = urwid.Pile(extra_rows)
+                self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
+            self.state = 'detailed'
 
     def safe_refresh(self, raw_data):
         try:
-            self.refresh(raw_data)
+            with self.lock:
+                self.refresh(raw_data)
         except (KeyError, TypeError, ValueError):
             pass
 
