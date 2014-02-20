@@ -267,6 +267,7 @@ class Finder(threading.Thread):
     def _change_state(self, state):
         with self.lock:
             self._state = state
+            LOG.debug("Changing finder state to: %s", list(self.activity()))
 
     def activity(self):
         with self.lock:
@@ -360,8 +361,8 @@ class Finder(threading.Thread):
                 with review.lock:
                     review.state = 'errored'
             else:
-                self.delayed_callbacks.put(functools.partial(display,
-                                                             review, details))
+                cb = functools.partial(display, review, details)
+                self.delayed_callbacks.put(cb)
 
 
 class Watcher(threading.Thread):
@@ -447,6 +448,9 @@ class ZuulReview(urwid.Pile):
             self.contents.append((item, (urwid.WEIGHT, 1)))
         self.state = None
         self.lock = threading.RLock()
+
+    def __str__(self):
+        return "%s, %s, %s" % (self.unique_id, self.project, self.state)
 
     @property
     def unique_id(self):
@@ -785,20 +789,21 @@ class Renderer(threading.Thread):
             frame.right_footer.set_text(text)
             frame.rendering = False
 
-        def followup(reviews, frame):
+        def followup(review, frame):
             if not self.options.detail:
                 return
-            for r in reviews:
-                with r.lock:
-                    if r.state in NO_DETAIL_STATES:
-                        return
-                    r.state = 'detailing'
-                priority = sys.maxint
-                try:
-                    priority = -1 * int(r.review_id)
-                except (TypeError, ValueError):
-                    pass
-                self.finder.work.put((priority, r))
+            with review.lock:
+                if review.state in NO_DETAIL_STATES:
+                    LOG.debug("Skipping %s", review)
+                    return
+                review.state = 'detailing'
+            priority = sys.maxint
+            try:
+                priority = -1 * int(review.review_id)
+            except (TypeError, ValueError):
+                pass
+            LOG.debug("Submitting %s (%s) for detailing", review, priority)
+            self.finder.work.put((priority, review))
 
         running = True
         while running:
@@ -813,8 +818,8 @@ class Renderer(threading.Thread):
             else:
                 cb = functools.partial(display, *rendering)
                 self.delayed_callbacks.put(cb)
-                cb = functools.partial(followup,
-                                       list(six.itervalues(self.last_reviews)))
+            for r in list(six.itervalues(self.last_reviews)):
+                cb = functools.partial(followup, review)
                 self.delayed_callbacks.put(cb)
 
 
@@ -881,7 +886,10 @@ class ZuulFrame(urwid.Frame):
 
         while not self.delayed_callbacks.empty():
             callback = self.delayed_callbacks.get()
-            callback(self)
+            try:
+                callback(self)
+            except Exception:
+                LOG.exception("Failed calling callback %s", callback)
 
         text = ''
         if not self.rendering:
