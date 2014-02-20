@@ -17,6 +17,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import collections
 import contextlib
 import errno
 import fnmatch
@@ -253,13 +254,14 @@ def make_columns(column_count):
 
 
 class Finder(threading.Thread):
-    def __init__(self, options):
+    def __init__(self, options, on_finish_cb):
         super(Finder, self).__init__()
         self.options = options
         self.daemon = True
         self.work = queue.PriorityQueue()
         self.lock = threading.RLock()
         self._fetched = 0
+        self._on_finish_cb = on_finish_cb
         self._processing = None
 
     def activity(self):
@@ -350,7 +352,7 @@ class Finder(threading.Thread):
                 with r.lock:
                     r.state = None
             else:
-                r.on_details(details)
+                self._on_finish_cb(r, details)
 
 
 class Watcher(threading.Thread):
@@ -437,14 +439,6 @@ class ZuulReview(urwid.Pile):
         self.state = None
         self.lock = threading.RLock()
 
-    def render(self, size, focus=False):
-        with self.lock:
-            return super(ZuulReview, self).render(size, focus=focus)
-
-    def rows(self, size, focus=False):
-        with self.lock:
-            return super(ZuulReview, self).rows(size, focus=focus)
-
     @property
     def unique_id(self):
         pieces = [self.review_id]
@@ -453,25 +447,20 @@ class ZuulReview(urwid.Pile):
         return ",".join([six.text_type(s) for s in pieces])
 
     def on_details(self, details):
-        with self.lock:
-            extra_rows = []
-            summary = details.get("summary")
-            if summary:
-                extra_rows.extend([
-                    urwid.Text([('title', summary)], align='center'),
-                ])
-            if extra_rows:
-                extra_rows.insert(0, urwid.Divider(u'─'))
-                extra_rows.append(urwid.Divider(u'─'))
-                extra_pile = urwid.Pile(extra_rows)
-                self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
-            self.state = 'detailed'
+        extra_rows = []
+        summary = details.get("summary")
+        if summary:
+            extra_rows.extend([
+                urwid.Text([('title', summary)], align='center'),
+            ])
+        if extra_rows:
+            extra_rows.insert(0, urwid.Divider(u'─'))
+            extra_rows.append(urwid.Divider(u'─'))
+            extra_pile = urwid.Pile(extra_rows)
+            self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
+        self.state = 'detailed'
 
     def refresh(self, raw_data):
-        with self.lock:
-            self._refresh(raw_data)
-
-    def _refresh(self, raw_data):
         new_jobs = []
         remaining_millis = []
         failure_count = 0
@@ -745,16 +734,22 @@ class Renderer(threading.Thread):
             }
 
         reviews = {}
+        delayed_refresh = []
         valid_project = functools.partial(validate_entry,
                                           self.allowed_projects)
         for name in sorted(pipes.keys()):
             for (r, raw_data) in iter_reviews(pipes[name]['data']):
                 if not valid_project(r.project):
                     continue
+                delay_refresh = False
                 if r.unique_id in self.last_reviews:
                     r = self.last_reviews[r.unique_id]
+                    delay_refresh = True
                 try:
-                    r.refresh(raw_data)
+                    if not delay_refresh:
+                        r.refresh(raw_data)
+                    else:
+                        delayed_refresh.append((r, raw_data))
                 except (KeyError, TypeError, ValueError):
                     pass
                 else:
@@ -777,21 +772,21 @@ class Renderer(threading.Thread):
         text = "%s pipelines (%sr, %sw, %sf, %sd)"
         text = text % (len(pipes), len(reviews),
                        len(columns.columns), fetch_id, detailed)
-        return (columns, text)
+        return (columns, text, delayed_refresh)
 
     def run(self):
         running = True
         while running:
             zuul_data, screen_size, on_finish_cb = self.work.get(True)
             try:
-                columns, right_text = self.render(zuul_data, screen_size)
+                rendering = self.render(zuul_data, screen_size)
             except KeyboardInterrupt:
                 running = False
                 thread.interrupt_main()
             except Exception:
                 LOG.exception("Failed rendering...")
             else:
-                on_finish_cb(columns, right_text)
+                on_finish_cb(*rendering)
                 if self.options.detail:
                     for r in six.itervalues(self.last_reviews):
                         self._fire_finder(r)
@@ -801,7 +796,7 @@ class ZuulFrame(urwid.Frame):
     def __init__(self, options):
         self.options = options
         self.watcher = Watcher(self.options)
-        self.finder = Finder(self.options)
+        self.finder = Finder(self.options, self.on_details)
         self.renderer = Renderer(self.options, self.finder)
         self.right_footer = urwid.Text('', align='right')
         self.center_footer = urwid.Text('', align='center')
@@ -812,7 +807,8 @@ class ZuulFrame(urwid.Frame):
         self.last_fetch = -1
         self.rendering = False
         self.last_refreshed = None
-        self._render = []
+        self._render = collections.deque()
+        self._detailed = collections.deque()
         self.columns = make_columns(self.options.screens)
         self.lock = threading.RLock()
         super(ZuulFrame, self).__init__(self.columns, footer=footer)
@@ -838,9 +834,13 @@ class ZuulFrame(urwid.Frame):
             if self.options.detail:
                 self.finder.start()
 
-    def on_render(self, columns, text):
+    def on_details(self, review, details):
         with self.lock:
-            self._render = [columns, text]
+            self._detailed.append((review, details))
+
+    def on_render(self, columns, text, delayed_refresh):
+        with self.lock:
+            self._render.append((columns, text, delayed_refresh))
             self.rendering = False
 
     def refresh(self, screen, screen_size):
@@ -863,10 +863,16 @@ class ZuulFrame(urwid.Frame):
             self.left_footer.set_text(text)
             return
 
-        if self._render:
-            self.right_footer.set_text(self._render[1])
-            self.body = self._render[0]
-            self._render = []
+        while self._render:
+            columns, text, delayed_refresh = self._render.popleft()
+            while delayed_refresh:
+                r, raw_data = delayed_refresh.pop()
+                r.refresh(raw_data)
+            self.right_footer.set_text(text)
+            self.body = columns
+        while self._detailed:
+            r, details = self._detailed.popleft()
+            r.on_details(details)
 
         text = ''
         if not self.rendering:
