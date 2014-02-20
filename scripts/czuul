@@ -460,6 +460,12 @@ class ZuulReview(urwid.Pile):
             self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
         self.state = 'detailed'
 
+    def safe_refresh(self, raw_data):
+        try:
+            self.refresh(raw_data)
+        except (KeyError, TypeError, ValueError):
+            pass
+
     def refresh(self, raw_data):
         new_jobs = []
         remaining_millis = []
@@ -745,16 +751,12 @@ class Renderer(threading.Thread):
                 if r.unique_id in self.last_reviews:
                     r = self.last_reviews[r.unique_id]
                     delay_refresh = True
-                try:
-                    if not delay_refresh:
-                        r.refresh(raw_data)
-                    else:
-                        delayed_refresh.append((r, raw_data))
-                except (KeyError, TypeError, ValueError):
-                    pass
+                if not delay_refresh:
+                    r.safe_refresh(raw_data)
                 else:
-                    reviews[r.unique_id] = r
-                    pipes[name]['reviews'].append(r)
+                    delayed_refresh.append((r, raw_data))
+                reviews[r.unique_id] = r
+                pipes[name]['reviews'].append(r)
 
         def cmp_reviews(r1, r2):
             return cmp((r1.review_id, r1.change_id),
@@ -794,24 +796,24 @@ class Renderer(threading.Thread):
 
 class ZuulFrame(urwid.Frame):
     def __init__(self, options):
+        super(ZuulFrame, self).__init__(make_columns(options.screens))
         self.options = options
-        self.watcher = Watcher(self.options)
-        self.finder = Finder(self.options, self.on_details)
-        self.renderer = Renderer(self.options, self.finder)
         self.right_footer = urwid.Text('', align='right')
         self.center_footer = urwid.Text('', align='center')
         self.left_footer = urwid.Text("Initializing...", align='left')
         footer = urwid.AttrWrap(
             urwid.Columns((self.left_footer,
                            self.center_footer, self.right_footer)), 'body')
-        self.last_fetch = -1
+        self.footer = footer
+        self.last_fetch_id = -1
         self.rendering = False
         self.last_refreshed = None
-        self._render = collections.deque()
-        self._detailed = collections.deque()
-        self.columns = make_columns(self.options.screens)
         self.lock = threading.RLock()
-        super(ZuulFrame, self).__init__(self.columns, footer=footer)
+        self.watcher = Watcher(self.options)
+        self.finder = Finder(self.options, self.on_details)
+        self.renderer = Renderer(self.options, self.finder)
+        self.delayed_render = collections.deque()
+        self.delayed_detail = collections.deque()
 
     def keypress(self, size, key):
         if key in REFRESH_KEYS:
@@ -836,11 +838,11 @@ class ZuulFrame(urwid.Frame):
 
     def on_details(self, review, details):
         with self.lock:
-            self._detailed.append((review, details))
+            self.delayed_detail.append((review, details))
 
     def on_render(self, columns, text, delayed_refresh):
         with self.lock:
-            self._render.append((columns, text, delayed_refresh))
+            self.delayed_render.append((columns, text, delayed_refresh))
             self.rendering = False
 
     def refresh(self, screen, screen_size):
@@ -863,25 +865,25 @@ class ZuulFrame(urwid.Frame):
             self.left_footer.set_text(text)
             return
 
-        while self._render:
-            columns, text, delayed_refresh = self._render.popleft()
+        while self.delayed_render:
+            columns, text, delayed_refresh = self.delayed_render.popleft()
             while delayed_refresh:
                 r, raw_data = delayed_refresh.pop()
-                r.refresh(raw_data)
+                r.safe_refresh(raw_data)
             self.right_footer.set_text(text)
             self.body = columns
-        while self._detailed:
-            r, details = self._detailed.popleft()
+        while self.delayed_detail:
+            r, details = self.delayed_detail.popleft()
             r.on_details(details)
 
         text = ''
         if not self.rendering:
             fetch_id = zuul_data['fetch_count']
-            if fetch_id > self.last_fetch:
+            if fetch_id > self.last_fetch_id:
                 self.rendering = True
                 self.renderer.work.put((zuul_data,
                                         screen_size, self.on_render))
-                self.last_fetch = fetch_id
+                self.last_fetch_id = fetch_id
                 self.last_refreshed = time.time()
             if not self.rendering:
                 if not watcher_state:
