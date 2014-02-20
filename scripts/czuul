@@ -818,7 +818,7 @@ class Renderer(threading.Thread):
             else:
                 cb = functools.partial(display, *rendering)
                 self.delayed_callbacks.put(cb)
-            for r in list(six.itervalues(self.last_reviews)):
+            for review in list(six.itervalues(self.last_reviews)):
                 cb = functools.partial(followup, review)
                 self.delayed_callbacks.put(cb)
 
