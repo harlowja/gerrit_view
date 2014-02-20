@@ -347,10 +347,10 @@ class Finder(threading.Thread):
                     r.state = 'ignored'
             except Exception:
                 LOG.exception("Failed processing review: %s", r.unique_id)
-                r.state = None
-            else:
                 with r.lock:
-                    r.on_details(details)
+                    r.state = None
+            else:
+                r.on_details(details)
 
 
 class Watcher(threading.Thread):
@@ -437,6 +437,14 @@ class ZuulReview(urwid.Pile):
         self.state = None
         self.lock = threading.RLock()
 
+    def render(self, size, focus=False):
+        with self.lock:
+            return super(ZuulReview, self).render(size, focus=focus)
+
+    def rows(self, size, focus=False):
+        with self.lock:
+            return super(ZuulReview, self).rows(size, focus=focus)
+
     @property
     def unique_id(self):
         pieces = [self.review_id]
@@ -445,20 +453,25 @@ class ZuulReview(urwid.Pile):
         return ",".join([six.text_type(s) for s in pieces])
 
     def on_details(self, details):
-        extra_rows = []
-        summary = details.get("summary")
-        if summary:
-            extra_rows.extend([
-                urwid.Text([('title', summary)], align='center'),
-            ])
-        if extra_rows:
-            extra_rows.insert(0, urwid.Divider(u'─'))
-            extra_rows.append(urwid.Divider(u'─'))
-            extra_pile = urwid.Pile(extra_rows)
-            self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
-        self.state = 'detailed'
+        with self.lock:
+            extra_rows = []
+            summary = details.get("summary")
+            if summary:
+                extra_rows.extend([
+                    urwid.Text([('title', summary)], align='center'),
+                ])
+            if extra_rows:
+                extra_rows.insert(0, urwid.Divider(u'─'))
+                extra_rows.append(urwid.Divider(u'─'))
+                extra_pile = urwid.Pile(extra_rows)
+                self.contents.insert(0, (extra_pile, (urwid.WEIGHT, 1)))
+            self.state = 'detailed'
 
     def refresh(self, raw_data):
+        with self.lock:
+            self._refresh(raw_data)
+
+    def _refresh(self, raw_data):
         new_jobs = []
         remaining_millis = []
         failure_count = 0
@@ -741,8 +754,7 @@ class Renderer(threading.Thread):
                 if r.unique_id in self.last_reviews:
                     r = self.last_reviews[r.unique_id]
                 try:
-                    with r.lock:
-                        r.refresh(raw_data)
+                    r.refresh(raw_data)
                 except (KeyError, TypeError, ValueError):
                     pass
                 else:
@@ -800,6 +812,7 @@ class ZuulFrame(urwid.Frame):
         self.last_fetch = -1
         self.rendering = False
         self.last_refreshed = None
+        self._render = []
         self.columns = make_columns(self.options.screens)
         self.lock = threading.RLock()
         super(ZuulFrame, self).__init__(self.columns, footer=footer)
@@ -827,8 +840,7 @@ class ZuulFrame(urwid.Frame):
 
     def on_render(self, columns, text):
         with self.lock:
-            self.right_footer.set_text(text)
-            self.body = columns
+            self._render = [columns, text]
             self.rendering = False
 
     def refresh(self, screen, screen_size):
@@ -850,6 +862,11 @@ class ZuulFrame(urwid.Frame):
                 text = "%s..." % (watcher_state)
             self.left_footer.set_text(text)
             return
+
+        if self._render:
+            self.right_footer.set_text(self._render[1])
+            self.body = self._render[0]
+            self._render = []
 
         text = ''
         if not self.rendering:
