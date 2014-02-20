@@ -86,6 +86,7 @@ REFRESH_KEYS = ('r', 'R')
 # Other constants
 GIT_URI_TPL = 'git://git.openstack.org/%(project)s'
 REMOTE_URI_TPL = 'https://review.openstack.org/%(project)s'
+NO_DETAIL_STATES = ('detailed', 'detailing', 'ignored', 'errored')
 
 
 @contextlib.contextmanager
@@ -349,12 +350,15 @@ class Finder(threading.Thread):
                 running = False
                 thread.interrupt_main()
             except ValueError:
+                LOG.exception("Invalid data encountered while processing"
+                              " review: %s", review)
                 with review.lock:
                     review.state = 'ignored'
             except Exception:
-                LOG.exception("Failed processing review: %s", review.unique_id)
+                LOG.exception("Exception encountered while processing"
+                              " review: %s", review)
                 with review.lock:
-                    review.state = None
+                    review.state = 'errored'
             else:
                 self.delayed_callbacks.put(functools.partial(display,
                                                              review, details))
@@ -786,7 +790,7 @@ class Renderer(threading.Thread):
                 return
             for r in reviews:
                 with r.lock:
-                    if r.state in ('detailed', 'detailing', 'ignored'):
+                    if r.state in NO_DETAIL_STATES:
                         return
                     r.state = 'detailing'
                 priority = sys.maxint
