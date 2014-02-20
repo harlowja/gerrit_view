@@ -17,7 +17,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import collections
 import contextlib
 import errno
 import fnmatch
@@ -254,24 +253,28 @@ def make_columns(column_count):
 
 
 class Finder(threading.Thread):
-    def __init__(self, options, on_finish_cb):
+    def __init__(self, frame):
         super(Finder, self).__init__()
-        self.options = options
+        self.options = frame.options
         self.daemon = True
         self.work = queue.PriorityQueue()
         self.lock = threading.RLock()
+        self.delayed_callbacks = frame.delayed_callbacks
         self._fetched = 0
-        self._on_finish_cb = on_finish_cb
-        self._processing = None
+        self._state = None
+
+    def _change_state(self, state):
+        with self.lock:
+            self._state = state
 
     def activity(self):
         with self.lock:
-            return (self._fetched, self.work.qsize(), self._processing)
+            return (self._fetched, self.work.qsize(), self._state)
 
-    def process(self, r):
-        project = r.project
-        review_id = six.text_type(r.review_id)
-        change_id = r.change_id
+    def process(self, review):
+        project = review.project
+        review_id = six.text_type(review.review_id)
+        change_id = review.change_id
 
         required_inputs = [review_id, project, change_id]
         if not all(required_inputs):
@@ -290,8 +293,8 @@ class Finder(threading.Thread):
             if e.errno != errno.EEXIST:
                 raise
         if not os.path.exists(code_path):
-            with self.lock:
-                self._processing = "Cloning %s for %s" % (project, r.unique_id)
+            self._change_state("Cloning %s for %s" % (project,
+                                                      review.unique_id))
             repo = clone_project(project, code_path)
         else:
             repo = git.Repo(code_path)
@@ -308,16 +311,14 @@ class Finder(threading.Thread):
         # interpret it improperly causing an AssertionError. Because the
         # data was fetched properly subsequent fetches don't seem to fail.
         # So try again if an AssertionError is caught.
-        with self.lock:
-            self._processing = "Fetching remote for %s" % (r.unique_id)
+        self._change_state("Fetching remote for %s" % (review.unique_id))
         try:
             remote.fetch(ref_id)
         except AssertionError:
             remote.fetch(ref_id)
         repo.git.checkout("FETCH_HEAD")
 
-        with self.lock:
-            self._processing = "Detailing %s" % (r.unique_id)
+        self._change_state("Detailing %s" % (review.unique_id))
         description = ''
         summary = ''
         if repo.head.object.message:
@@ -331,34 +332,38 @@ class Finder(threading.Thread):
         }
 
     def run(self):
+
+        def display(review, details, frame):
+            review.on_details(details)
+
         running = True
         while running:
-            with self.lock:
-                self._processing = None
-            _priority, r = self.work.get(True)
+            self._change_state(None)
+            priority, review = self.work.get(True)
             with self.lock:
                 self._fetched += 1
-                self._processing = "Processing %s" % (r.unique_id)
+                self._change_state("Processing %s" % (review.unique_id))
             try:
-                details = self.process(r)
+                details = self.process(review)
             except KeyboardInterrupt:
                 running = False
                 thread.interrupt_main()
             except ValueError:
-                with r.lock:
-                    r.state = 'ignored'
+                with review.lock:
+                    review.state = 'ignored'
             except Exception:
-                LOG.exception("Failed processing review: %s", r.unique_id)
-                with r.lock:
-                    r.state = None
+                LOG.exception("Failed processing review: %s", review.unique_id)
+                with review.lock:
+                    review.state = None
             else:
-                self._on_finish_cb(r, details)
+                self.delayed_callbacks.put(functools.partial(display,
+                                                             review, details))
 
 
 class Watcher(threading.Thread):
-    def __init__(self, options):
+    def __init__(self, frame):
         super(Watcher, self).__init__()
-        self.options = options
+        self.options = frame.options
         self.daemon = True
         self.data = {}
         self.event = threading.Event()
@@ -701,10 +706,11 @@ class CyclingColumns(urwid.Columns):
 
 
 class Renderer(threading.Thread):
-    def __init__(self, options, finder):
+    def __init__(self, frame):
         super(Renderer, self).__init__()
-        self.finder = finder
-        self.options = options
+        self.delayed_callbacks = frame.delayed_callbacks
+        self.finder = frame.finder
+        self.options = frame.options
         self.daemon = True
         self.work = queue.Queue()
         self.last_reviews = {}
@@ -712,18 +718,6 @@ class Renderer(threading.Thread):
                                      for p in self.options.projects if p])
         self.allowed_pipelines = set([p.lower()
                                       for p in self.options.pipelines if p])
-
-    def _fire_finder(self, r):
-        with r.lock:
-            if r.state in ('detailed', 'detailing', 'ignored'):
-                return
-            r.state = 'detailing'
-        priority = sys.maxint
-        try:
-            priority = -1 * int(r.review_id)
-        except (TypeError, ValueError):
-            pass
-        self.finder.work.put((priority, r))
 
     def render(self, zuul_data, screen_size):
         columns = make_columns(self.options.screens)
@@ -772,16 +766,39 @@ class Renderer(threading.Thread):
                 columns.place(r, maxrow, maxcol)
 
         fetch_id = zuul_data['fetch_count']
-        detailed, awaiting, processing = self.finder.activity()
+        detailed, awaiting, state = self.finder.activity()
         text = "%s pipelines (%sr, %sw, %sf, %sd)"
         text = text % (len(pipes), len(reviews),
                        len(columns.columns), fetch_id, detailed)
         return (columns, text, delayed_refresh)
 
     def run(self):
+
+        def display(columns, text, delayed_refresh, frame):
+            for r, raw_data in delayed_refresh:
+                r.safe_refresh(raw_data)
+            frame.body = columns
+            frame.right_footer.set_text(text)
+            frame.rendering = False
+
+        def followup(reviews, frame):
+            if not self.options.detail:
+                return
+            for r in reviews:
+                with r.lock:
+                    if r.state in ('detailed', 'detailing', 'ignored'):
+                        return
+                    r.state = 'detailing'
+                priority = sys.maxint
+                try:
+                    priority = -1 * int(r.review_id)
+                except (TypeError, ValueError):
+                    pass
+                self.finder.work.put((priority, r))
+
         running = True
         while running:
-            zuul_data, screen_size, on_finish_cb = self.work.get(True)
+            zuul_data, screen_size = self.work.get(True)
             try:
                 rendering = self.render(zuul_data, screen_size)
             except KeyboardInterrupt:
@@ -790,10 +807,11 @@ class Renderer(threading.Thread):
             except Exception:
                 LOG.exception("Failed rendering...")
             else:
-                on_finish_cb(*rendering)
-                if self.options.detail:
-                    for r in six.itervalues(self.last_reviews):
-                        self._fire_finder(r)
+                cb = functools.partial(display, *rendering)
+                self.delayed_callbacks.put(cb)
+                cb = functools.partial(followup,
+                                       list(six.itervalues(self.last_reviews)))
+                self.delayed_callbacks.put(cb)
 
 
 class ZuulFrame(urwid.Frame):
@@ -810,12 +828,11 @@ class ZuulFrame(urwid.Frame):
         self.last_fetch_id = -1
         self.rendering = False
         self.last_refreshed = None
+        self.delayed_callbacks = queue.Queue()
         self.lock = threading.RLock()
-        self.watcher = Watcher(self.options)
-        self.finder = Finder(self.options, self.on_details)
-        self.renderer = Renderer(self.options, self.finder)
-        self.delayed_render = collections.deque()
-        self.delayed_detail = collections.deque()
+        self.watcher = Watcher(self)
+        self.finder = Finder(self)
+        self.renderer = Renderer(self)
 
     def keypress(self, size, key):
         if key in REFRESH_KEYS:
@@ -838,15 +855,6 @@ class ZuulFrame(urwid.Frame):
             if self.options.detail:
                 self.finder.start()
 
-    def on_details(self, review, details):
-        with self.lock:
-            self.delayed_detail.append((review, details))
-
-    def on_render(self, columns, text, delayed_refresh):
-        with self.lock:
-            self.delayed_render.append((columns, text, delayed_refresh))
-            self.rendering = False
-
     def refresh(self, screen, screen_size):
         if screen_size is None or not all(screen_size):
             return
@@ -856,57 +864,49 @@ class ZuulFrame(urwid.Frame):
     def _refresh(self, screen, screen_size):
         with self.watcher.lock:
             zuul_data = self.watcher.data
-            watcher_state, fetches = self.watcher.activity()
+            state, fetches = self.watcher.activity()
 
         if not zuul_data:
-            if not watcher_state:
+            if not state:
                 text = "Waiting for initial data..."
                 self._poke_watcher()
             else:
-                text = "%s..." % (watcher_state)
+                text = "%s..." % (state)
             self.left_footer.set_text(text)
             return
 
-        while self.delayed_render:
-            columns, text, delayed_refresh = self.delayed_render.popleft()
-            while delayed_refresh:
-                r, raw_data = delayed_refresh.pop()
-                r.safe_refresh(raw_data)
-            self.right_footer.set_text(text)
-            self.body = columns
-        while self.delayed_detail:
-            r, details = self.delayed_detail.popleft()
-            r.on_details(details)
+        while not self.delayed_callbacks.empty():
+            callback = self.delayed_callbacks.get()
+            callback(self)
 
         text = ''
         if not self.rendering:
             fetch_id = zuul_data['fetch_count']
             if fetch_id > self.last_fetch_id:
                 self.rendering = True
-                self.renderer.work.put((zuul_data,
-                                        screen_size, self.on_render))
+                self.renderer.work.put((zuul_data, screen_size))
                 self.last_fetch_id = fetch_id
                 self.last_refreshed = time.time()
             if not self.rendering:
-                if not watcher_state:
+                if not state:
                     next_fetch = self.last_refreshed + self.options.frequency
                     refresh_in = int(max(0, next_fetch - time.time()))
                     text = "Refresh expected in %s seconds..." % (refresh_in)
                     if refresh_in <= 0:
                         self._poke_watcher()
                 else:
-                    text = text = "%s..." % (watcher_state)
+                    text = text = "%s..." % (state)
         if self.rendering:
             text = "Rendering..."
         self.left_footer.set_text(text)
 
         text = ""
-        fetched, awaiting, processing = self.finder.activity()
-        active_count = int(bool(processing)) + awaiting
+        fetched, awaiting, state = self.finder.activity()
+        active_count = int(bool(state)) + awaiting
         if active_count > 0:
             text += "%s reviews waiting to be detailed" % (active_count)
-            if processing:
-                text += "\n- %s -" % (processing)
+            if state:
+                text += "\n- %s -" % (state)
         self.center_footer.set_text(text)
 
 
