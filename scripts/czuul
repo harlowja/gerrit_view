@@ -73,6 +73,13 @@ PALETTE = (
     ('selected', urwid.DARK_GRAY, urwid.DEFAULT),
 )
 LEFT_RIGHT_KEYS = (urwid.CURSOR_LEFT, urwid.CURSOR_RIGHT)
+MOVE_KEYS = list(LEFT_RIGHT_KEYS)
+MOVE_KEYS.extend([
+    urwid.CURSOR_UP,
+    urwid.CURSOR_DOWN,
+    urwid.CURSOR_PAGE_UP,
+    urwid.CURSOR_PAGE_DOWN,
+])
 QUIT_KEYS = ('q', 'Q', 'esc')
 REFRESH_KEYS = ('r', 'R')
 
@@ -803,7 +810,7 @@ class ZuulFrame(urwid.Frame):
             return None
         m_key = self._command_map[key]
         with self.lock:
-            if self.rendering and m_key in LEFT_RIGHT_KEYS:
+            if self.rendering and m_key in MOVE_KEYS:
                 return key
         return super(ZuulFrame, self).keypress(size, key)
 
