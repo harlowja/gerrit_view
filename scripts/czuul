@@ -72,6 +72,7 @@ PALETTE = (
     # Column usage
     ('selected', urwid.DARK_GRAY, urwid.DEFAULT),
 )
+LEFT_RIGHT_KEYS = (urwid.CURSOR_LEFT, urwid.CURSOR_RIGHT)
 QUIT_KEYS = ('q', 'Q', 'esc')
 REFRESH_KEYS = ('r', 'R')
 
@@ -647,7 +648,7 @@ class CyclingColumns(urwid.Columns):
         else:
             key = w.keypress((mc,) + size[1:], key)
         m_key = self._command_map[key]
-        if m_key not in (urwid.CURSOR_LEFT, urwid.CURSOR_RIGHT):
+        if m_key not in LEFT_RIGHT_KEYS:
             return key
         k = i
         content_len = len(self.contents)
@@ -800,6 +801,10 @@ class ZuulFrame(urwid.Frame):
         if key in REFRESH_KEYS:
             self._poke_watcher()
             return None
+        m_key = self._command_map[key]
+        with self.lock:
+            if self.rendering and m_key in LEFT_RIGHT_KEYS:
+                return key
         return super(ZuulFrame, self).keypress(size, key)
 
     def _poke_watcher(self):
