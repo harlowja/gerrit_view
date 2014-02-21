@@ -139,18 +139,6 @@ def _make_text(text, align=None):
     return urwid.Text(text, wrap='any', align=align)
 
 
-def _get_key_path():
-    home_dir = os.path.expanduser("~")
-    ssh_dir = os.path.join(home_dir, ".ssh")
-    if not os.path.isdir(ssh_dir):
-        return None
-    for k in ('id_rsa', 'id_dsa'):
-        path = os.path.join(ssh_dir, k)
-        if os.path.isfile(path):
-            return path
-    return None
-
-
 def _format_date(when=None):
     if when is None:
         when = datetime.now()
@@ -814,8 +802,8 @@ def main():
                       type="int", help="prefetch amount [default: %default]",
                       metavar="COUNT", default=PREFETCH_LEN)
     parser.add_option("-k", "--keyfile", dest="keyfile", action='store',
-                      help="gerrit ssh keyfile [default: %default]",
-                      metavar="FILE", default=_get_key_path())
+                      help="gerrit ssh keyfile [default: attempt to use local agent]",
+                      metavar="FILE", default=None)
     parser.add_option("--project", dest="projects", action='append',
                       help="only show given projects reviews",
                       metavar="PROJECT", default=[])
