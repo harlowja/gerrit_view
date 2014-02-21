@@ -1,10 +1,24 @@
-**Gerrit & zuul viewers & tools for all**
-=========================================
+**A set of tools to query/view Gerrit patch reviews and their Zuul status**
+===========================================================================
+
+Current set of tools:
+
+- `qgerrit` -- to query different projects' Gerrit reviews based on a
+   set of criteria/filters.
+
+- `cgerrit` -- to view (in real time) Gerrit reviews on CLI.
+
+- `czuul` -- to view Gerrit reviews' Zuul (a pipeline oriented project
+   gating and automation system) status on CLI.
+
+
 
 qgerrit
 ------------
 
-Use `qgerrit` to find out what your friends have been up to::
+Use `qgerrit` to query different projects' Gerrit reviews
+based on a set of criteria/filters::
+
 
     $ qgerrit -u 'harlowja'
     $ qgerrit -h
@@ -33,7 +47,29 @@ Use `qgerrit` to find out what your friends have been up to::
                             display field in results [default: 'approvals',
                             'branch', 'createdOn', 'lastUpdated', 'owner',
                             'project', 'status', 'subject', 'topic', 'url']
-    
+
+########
+Examples
+########
+
+1. To eunmerate all reviews requests for openstack/nova which touch a
+   file with libvirt in the name::
+
+    $ qgerrit \
+      -l harlowja \
+      -f url -f branch -f owner -f subject:100 \
+      -f lastUpdated -f createdOn -f approvals \
+      --sort createdOn \
+      --project openstack/nova \
+      libvirt
+
+2. Show reviews for neutron which does not have any negative karma, as
+   those reviews are going to be resubmitted any way::
+
+    $ qgerrit -l harlowja -a c0,v0 neutron
+
+(Thanks to Daniel Berrangé for the above two examples)
+
 
 cgerrit
 ------------
@@ -70,6 +106,19 @@ Keys supported
 
 * (S, s) - Change sort mode (default none)
 * (q, Q, esc) - Quit                      
+
+########
+Examples
+########
+
+1. To view reviews (real-time) for a specific project::
+
+    $ cgerrit -u harlowja --project=openstack/neutron
+
+2. To view reviews (real-time) for all projects::
+
+    $ cgerrit -u harlowja
+
 
 czuul
 ------------
@@ -113,6 +162,22 @@ Keys supported
 * (R, r) - Force refresh
 * (q, Q, esc) - Quit
 
+########
+Examples
+########
+
+1. To get details about a project::
+
+    $ czuul --project "openstack/nova"
+
+2. To fetch review details (including git summary) about a specific
+   project::
+
+    $ czuul --details --project "openstack/nova"
+
+3. To track all OpenStack project details in one go::
+
+    $ czuul --details --project "openstack/*"
 
 
 .. _urwid: http://excess.org/urwid/
