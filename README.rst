@@ -99,6 +99,12 @@ urwid_, curses_ library and the requests_ library):
       --details             fetch each reviews details [default: False]
       --detail-dir=CLONE_DIR
                             store git checkout locations at [default: /tmp/czuul]
+      --detail-git=GIT_SERVER
+                            fetch git repositories from this git server [default:
+                            git://git.openstack.org/]
+      --detail-remote=REMOTE_SERVER
+                            fetch review remotes from this gerrit server [default:
+                            https://review.openstack.org/]
 
 ##############
 Keys supported
