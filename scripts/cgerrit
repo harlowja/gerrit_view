@@ -910,7 +910,10 @@ def main():
                           unhandled_input=on_unhandled_input)
     gerrit_reader.start()
     loop.event_loop.enter_idle(functools.partial(on_idle, loop))
-    loop.run()
+    try:
+        loop.run()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
