@@ -27,7 +27,8 @@ Use `qgerrit` to find out what your friends have been up to::
       -a APPROVAL, --approval=APPROVAL
                             filter on approval value min %n [default: no filter]
       -k FILE, --keyfile=FILE
-                            gerrit ssh keyfile [default: /home/josh/.ssh/id_rsa]
+                            gerrit ssh keyfile [default: attempt to use
+                            local agent]
       -t SORT, --sort=SORT  sort order for results [default: createdOn]
       -f FIELD, --field=FIELD
                             display field in results [default: 'approvals',
