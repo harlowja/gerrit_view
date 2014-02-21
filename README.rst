@@ -74,7 +74,7 @@ cgerrit
 ------------
 
 Use ``cgerrit`` to watch (in realtime) the reviews showing up (powered by
-urwid_ and the curses_ library):
+urwid_ and the gerrit_ library):
 
 .. image:: https://github.com/harlowja/gerrit_view/raw/master/screenshots/screen1.png
 
@@ -183,5 +183,5 @@ Examples
 
 
 .. _urwid: http://excess.org/urwid/
-.. _curses: http://docs.python.org/2.7/library/curses.html
+.. _gerrit: https://pypi.python.org/pypi/gerritlib
 .. _requests: http://www.python-requests.org/
