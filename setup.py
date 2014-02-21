@@ -19,12 +19,36 @@
 #    under the License.
 
 import os
+import re
 
 from setuptools import setup
 
 
 def _path(fn):
     return os.path.join(os.path.dirname(__file__), fn)
+
+
+def _has_all(text, search_for):
+    matches = 0
+    for s in search_for:
+        if text.find(s) != -1:
+            matches += 1
+    return matches == len(search_for)
+
+
+def _readme():
+    # Filter out screenshots...
+    lines = []
+    with open(_path("README.rst"), "rb") as handle:
+        contents = handle.read()
+        for line in contents.splitlines():
+            screenshot = False
+            if _has_all(line, ['screenshots', '.png']):
+                if re.match(r"^..(\s+)image::(.*)$", line, re.I):
+                    screenshot = True
+            if not screenshot:
+                lines.append(line)
+    return "\n".join(lines)
 
 
 setup(name='gerrit-view',
@@ -56,5 +80,5 @@ setup(name='gerrit-view',
         "Programming Language :: Python",
       ],
       keywords="gerrit curses urwid console",
-      long_description='Gerrit & zuul viewers & tools for all',
+      long_description=_readme(),
      )
