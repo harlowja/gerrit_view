@@ -992,7 +992,10 @@ def main():
                           handle_mouse=False,
                           unhandled_input=on_unhandled_input)
     loop.event_loop.enter_idle(functools.partial(on_idle, loop, frame))
-    loop.run()
+    try:
+        loop.run()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
