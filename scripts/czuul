@@ -84,8 +84,6 @@ QUIT_KEYS = ('q', 'Q', 'esc')
 REFRESH_KEYS = ('r', 'R')
 
 # Other constants
-GIT_URI_TPL = 'git://git.openstack.org/%(project)s'
-REMOTE_URI_TPL = 'https://review.openstack.org/%(project)s'
 NO_DETAIL_STATES = ('detailed', 'detailing', 'ignored', 'errored')
 
 
@@ -151,12 +149,13 @@ def decode_millis(millis):
     return (secs, minutes)
 
 
-def clone_project(project, code_path):
+def clone_project(git_server, project, code_path):
     # Create a temporary directory, clone there, then attempt to move to the
     # main directory, if the move fails, that's ok, but the initial clone
     # should not.
     with temp_dir() as tmp_d:
-        git_uri = GIT_URI_TPL % {'project': project}
+        git_server = git_server.rstrip("/")
+        git_uri = "%s/%s" % (git_server, project)
         repo_path = os.path.join(tmp_d, os.path.basename(project))
         os.makedirs(repo_path)
         repo = git.Repo.clone_from(git_uri, repo_path)
@@ -297,14 +296,16 @@ class Finder(threading.Thread):
         if not os.path.exists(code_path):
             self._change_state("Cloning %s for %s" % (project,
                                                       review.unique_id))
-            repo = clone_project(project, code_path)
+            repo = clone_project(self.options.git_server, project, code_path)
         else:
             repo = git.Repo(code_path)
 
         clear_extra_remotes(repo)
         reset_repo(repo)
 
-        remote_uri = REMOTE_URI_TPL % {'project': project}
+        remote_server = self.options.remote_server
+        remote_server = remote_server.rstrip("/")
+        remote_uri = "%s/%s" % (remote_server, project)
         remote = repo.create_remote(review_id, remote_uri)
         sub_id = review_id[-2:]
         ref_id = 'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id)
@@ -960,6 +961,14 @@ def main():
                       help="store git checkout locations at"
                            " [default: %default]",
                       default=os.path.join(tempfile.gettempdir(), 'czuul'))
+    parser.add_option("--detail-git", dest="git_server", action='store',
+                      help="fetch git repositories from this git"
+                           " server [default: %default]",
+                      default='git://git.openstack.org/')
+    parser.add_option("--detail-remote", dest="remote_server", action='store',
+                      help="fetch review remotes from this gerrit server"
+                           " [default: %default]",
+                      default='https://review.openstack.org/')
     (options, args) = parser.parse_args()
     if options.frequency < ZUUL_MIN_FREQ:
         parser.error("poll frequency must be greater or equal to %s seconds"
@@ -969,6 +978,12 @@ def main():
         parser.error("one or more split-screens must be provided")
 
     if options.detail:
+        if not options.remote_server:
+            parser.error("missing required remote server")
+        if not options.git_server:
+            parser.error("missing required git server")
+        if not options.clone_dir:
+            parser.error("missing required cloning directory")
         if not os.path.isdir(options.clone_dir):
             os.makedirs(options.clone_dir)
     frame = ZuulFrame(options)
