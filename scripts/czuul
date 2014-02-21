@@ -85,6 +85,7 @@ REFRESH_KEYS = ('r', 'R')
 
 # Other constants
 NO_DETAIL_STATES = ('detailed', 'detailing', 'ignored', 'errored')
+JOB_RESULT_FAILURES = ('FAILURE',)
 
 
 @contextlib.contextmanager
@@ -494,7 +495,7 @@ class ZuulReview(urwid.Pile):
             remaining_millis.append(millis)
             (secs, mins) = decode_millis(millis)
             time_add_on = ""
-            if j.get("result") == 'FAILURE' and j.get("voting"):
+            if j.get("result") in JOB_RESULT_FAILURES and j.get("voting"):
                 time_attr = 'dead'
                 time_add_on = "!"
                 failure_count += 1
