@@ -3,18 +3,18 @@
 
 Current set of tools:
 
-- `qgerrit` -- to query different projects' Gerrit reviews based on a set of criteria/filters.
+- ``qgerrit`` -- to query different projects' Gerrit reviews based on a set of criteria/filters.
 
-- `cgerrit` -- to view (in real time) Gerrit reviews on CLI.
+- ``cgerrit`` -- to view (in real time) Gerrit reviews on CLI.
 
-- `czuul` -- to view Gerrit reviews' Zuul (a pipeline oriented project gating and automation system) status on CLI.
+- ``czuul`` -- to view Gerrit reviews' Zuul (a pipeline oriented project gating and automation system) status on CLI.
 
 
 
 qgerrit
 ------------
 
-Use `qgerrit` to query different projects' Gerrit reviews
+Use ``qgerrit`` to query different projects' Gerrit reviews
 based on a set of criteria/filters::
 
 
@@ -72,7 +72,7 @@ Examples
 cgerrit
 ------------
 
-Use `cgerrit` to watch (in realtime) the reviews showing up (powered by
+Use ``cgerrit`` to watch (in realtime) the reviews showing up (powered by
 urwid_ and the curses_ library):
 
 .. image:: https://github.com/harlowja/gerrit_view/raw/master/screenshots/screen1.png
@@ -121,7 +121,7 @@ Examples
 czuul
 ------------
 
-Use `czuul` to watch the reviews zuul status (powered by
+Use ``czuul`` to watch the reviews zuul status (powered by
 urwid_, curses_ library and the requests_ library):
 
 .. image:: https://github.com/harlowja/gerrit_view/raw/master/screenshots/screen2.png
