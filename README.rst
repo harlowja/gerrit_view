@@ -74,7 +74,7 @@ cgerrit
 ------------
 
 Use ``cgerrit`` to watch (in realtime) the reviews showing up (powered by
-urwid_ and the gerrit_ library):
+urwid_ and the gerrit_ libraries):
 
 .. image:: https://github.com/harlowja/gerrit_view/raw/master/screenshots/screen1.png
 
@@ -126,7 +126,7 @@ czuul
 ------------
 
 Use ``czuul`` to watch the reviews zuul status (powered by
-urwid_, curses_ library and the requests_ library):
+urwid_ and the requests_ libraries):
 
 .. image:: https://github.com/harlowja/gerrit_view/raw/master/screenshots/screen2.png
 
