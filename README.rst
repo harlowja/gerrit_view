@@ -3,13 +3,11 @@
 
 Current set of tools:
 
-- `qgerrit` -- to query different projects' Gerrit reviews based on a
-   set of criteria/filters.
+- `qgerrit` -- to query different projects' Gerrit reviews based on a set of criteria/filters.
 
 - `cgerrit` -- to view (in real time) Gerrit reviews on CLI.
 
-- `czuul` -- to view Gerrit reviews' Zuul (a pipeline oriented project
-   gating and automation system) status on CLI.
+- `czuul` -- to view Gerrit reviews' Zuul (a pipeline oriented project gating and automation system) status on CLI.
 
 
 
