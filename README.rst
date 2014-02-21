@@ -87,17 +87,20 @@ urwid_ and the curses_ library):
     
     Options:
       -h, --help            show this help message and exit
-      -u USER, --user=USER  gerrit user [default: harlowja]
+      -u USER, --user=USER  gerrit user [default: josh]
       -s SERVER, --server=SERVER
                             gerrit server [default: review.openstack.org]
       -p PORT, --port=PORT  gerrit port [default: 29418]
       --prefetch=COUNT      prefetch amount [default: 50]
       -k FILE, --keyfile=FILE
-                            gerrit ssh keyfile [default:
-                            /home/harlowja/.ssh/id_rsa]
+                            gerrit ssh keyfile [default: attempt to use local
+                            agent]
       --project=PROJECT     only show given projects reviews
       -i COUNT, --items=COUNT
                             how many items to keep visible [default: 50]
+      -r FILE, --record-file=FILE
+                            record file to store past events (also used for
+                            initial view population if provided)
 
 ##############
 Keys supported
