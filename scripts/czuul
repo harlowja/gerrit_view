@@ -235,9 +235,10 @@ def iter_reviews(data, pipeline=None):
             for raw_data in h:
                 review_id = raw_data.get("id")
                 project = raw_data.get("project")
-                if not all([review_id, project]):
+                zuul_ref = raw_data.get("zuul_ref")
+                if not all([review_id, project, zuul_ref]):
                     continue
-                r = ZuulReview(review_id, project,
+                r = ZuulReview(review_id, project, zuul_ref,
                                pipeline=pipeline,
                                url=raw_data.get('url'))
                 yield (r, raw_data)
@@ -298,7 +299,7 @@ class Finder(threading.Thread):
                 raise
         if not os.path.exists(code_path):
             self._change_state("Cloning %s for %s" % (project,
-                                                      review.unique_id))
+                                                      review.pretty_id))
             repo = clone_project(self.options.git_server, project, code_path)
         else:
             repo = git.Repo(code_path)
@@ -317,14 +318,14 @@ class Finder(threading.Thread):
         # interpret it improperly causing an AssertionError. Because the
         # data was fetched properly subsequent fetches don't seem to fail.
         # So try again if an AssertionError is caught.
-        self._change_state("Fetching remote for %s" % (review.unique_id))
+        self._change_state("Fetching remote for %s" % (review.pretty_id))
         try:
             remote.fetch(ref_id)
         except AssertionError:
             remote.fetch(ref_id)
         repo.git.checkout("FETCH_HEAD")
 
-        self._change_state("Detailing %s" % (review.unique_id))
+        self._change_state("Detailing %s" % (review.pretty_id))
         description = ''
         summary = ''
         if repo.head.object.message:
@@ -348,7 +349,7 @@ class Finder(threading.Thread):
             priority, review = self.work.get(True)
             with self.lock:
                 self._fetched += 1
-                self._change_state("Processing %s" % (review.unique_id))
+                self._change_state("Processing %s" % (review.pretty_id))
             try:
                 details = self.process(review)
             except KeyboardInterrupt:
@@ -426,7 +427,7 @@ class Watcher(threading.Thread):
 
 
 class ZuulReview(urwid.Pile):
-    def __init__(self, review_id, project, pipeline=None, url=None):
+    def __init__(self, review_id, project, zuul_ref, pipeline=None, url=None):
         super(ZuulReview, self).__init__([])
         try:
             self.change_id = int(review_id.split(",", 1)[1].strip())
@@ -437,6 +438,7 @@ class ZuulReview(urwid.Pile):
         self.project = project
         self.pipeline = pipeline
         self.jobs = {}
+        self.zuul_ref = zuul_ref
         self.progress_bar = urwid.ProgressBar('normal', 'complete',
                                               0.0, 1.0, 'smooth')
         self.progress_bar.set_completion(0.0)
@@ -453,18 +455,26 @@ class ZuulReview(urwid.Pile):
             self.contents.append((item, (urwid.WEIGHT, 1)))
         self.state = None
         self.lock = threading.RLock()
+        ident_pieces = [
+            self.review_id,
+            self.change_id,
+            self.zuul_ref,
+            self.project,
+            self.pipeline,
+        ]
+        self.unique_id = ",".join([six.text_type(p)
+                                   for p in ident_pieces if p is not None])
+        pretty_pieces = [
+            self.review_id,
+            self.change_id,
+        ]
+        self.pretty_id = ",".join([six.text_type(p)
+                                   for p in pretty_pieces if p is not None])
+        if self.pipeline:
+            self.pretty_id += " (%s)" % self.pipeline
 
     def __str__(self):
-        return "%s, %s, %s" % (self.unique_id, self.project, self.state)
-
-    @property
-    def unique_id(self):
-        pieces = [self.review_id]
-        if self.change_id is not None:
-            pieces.append(self.change_id)
-        if self.pipeline:
-            pieces.append(self.pipeline)
-        return ",".join([six.text_type(s) for s in pieces])
+        return "%s; %s" % (self.unique_id, self.state)
 
     def on_details(self, details):
         with self.lock:
