@@ -460,7 +460,7 @@ class ZuulReview(urwid.Pile):
     @property
     def unique_id(self):
         pieces = [self.review_id]
-        if self.change_id:
+        if self.change_id is not None:
             pieces.append(self.change_id)
         if self.pipeline:
             pieces.append(self.pipeline)
