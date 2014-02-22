@@ -282,9 +282,8 @@ class Finder(threading.Thread):
         change_id = review.change_id
 
         if change_id is None:
-            raise ValueError("Can not detail a review %s of project %s"
-                             " without a change identifier"
-                             % (review_id, project))
+            raise ValueError("Can not detail review %s if it has no change"
+                             " identifier" % (review))
 
         LOG.debug("Fetching details for %s - %s/%s",
                   project, review_id, change_id)
