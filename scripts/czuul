@@ -281,10 +281,10 @@ class Finder(threading.Thread):
         review_id = six.text_type(review.review_id)
         change_id = review.change_id
 
-        required_inputs = [review_id, project, change_id]
-        if not all(required_inputs):
-            raise ValueError("Missing one of %s, invalid inputs"
-                             % (required_inputs))
+        if change_id is None:
+            raise ValueError("Can not detail a review %s of project %s"
+                             " without a change identifier"
+                             % (review_id, project))
 
         LOG.debug("Fetching details for %s - %s/%s",
                   project, review_id, change_id)
