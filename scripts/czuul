@@ -303,6 +303,7 @@ class Finder(threading.Thread):
         else:
             repo = git.Repo(code_path)
 
+        self._change_state("Cleaning %s for %s" % (project, review.pretty_id))
         clear_extra_remotes(repo)
         reset_repo(repo)
 
