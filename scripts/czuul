@@ -253,7 +253,7 @@ def make_columns(column_count):
         w = urwid.AttrMap(urwid.LineBox(w), 'selected', 'body')
         return (c, w)
 
-    return CyclingColumns(column_maker, column_count)
+    return MultiColumns(column_maker, column_count)
 
 
 class Finder(threading.Thread):
@@ -574,9 +574,9 @@ class ZuulPipeline(urwid.Pile):
             self.contents.append((h, (urwid.WEIGHT, 1)))
 
 
-class CyclingColumns(urwid.Columns):
+class MultiColumns(urwid.Columns):
     def __init__(self, maker, count):
-        super(CyclingColumns, self).__init__([])
+        super(MultiColumns, self).__init__([])
         assert int(count) > 0, 'Column count must be > 0'
         self.columns = []
         self.count = int(count)
