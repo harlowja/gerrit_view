@@ -229,7 +229,7 @@ def iter_pipelines(data):
         yield (p, raw_data)
 
 
-def iter_reviews(data):
+def iter_reviews(data, pipeline=None):
     for q in data.get('change_queues', []):
         for h in q.get('heads', []):
             for raw_data in h:
@@ -237,7 +237,9 @@ def iter_reviews(data):
                 project = raw_data.get("project")
                 if not all([review_id, project]):
                     continue
-                r = ZuulReview(review_id, project, url=raw_data.get('url'))
+                r = ZuulReview(review_id, project,
+                               pipeline=pipeline,
+                               url=raw_data.get('url'))
                 yield (r, raw_data)
 
 
@@ -424,7 +426,7 @@ class Watcher(threading.Thread):
 
 
 class ZuulReview(urwid.Pile):
-    def __init__(self, review_id, project, url=None):
+    def __init__(self, review_id, project, pipeline=None, url=None):
         super(ZuulReview, self).__init__([])
         try:
             self.change_id = int(review_id.split(",", 1)[1].strip())
@@ -433,6 +435,7 @@ class ZuulReview(urwid.Pile):
             self.change_id = None
             self.review_id = review_id
         self.project = project
+        self.pipeline = pipeline
         self.jobs = {}
         self.progress_bar = urwid.ProgressBar('normal', 'complete',
                                               0.0, 1.0, 'smooth')
@@ -457,8 +460,10 @@ class ZuulReview(urwid.Pile):
     @property
     def unique_id(self):
         pieces = [self.review_id]
-        if self.change_id is not None:
+        if self.change_id:
             pieces.append(self.change_id)
+        if self.pipeline:
+            pieces.append(self.pipeline)
         return ",".join([six.text_type(s) for s in pieces])
 
     def on_details(self, details):
@@ -750,7 +755,8 @@ class Renderer(threading.Thread):
         valid_project = functools.partial(validate_entry,
                                           self.allowed_projects)
         for name in sorted(pipes.keys()):
-            for (r, raw_data) in iter_reviews(pipes[name]['data']):
+            for (r, raw_data) in iter_reviews(pipes[name]['data'],
+                                              pipeline=name):
                 if not valid_project(r.project):
                     continue
                 delay_refresh = False
