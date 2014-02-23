@@ -31,6 +31,8 @@ import thread
 import threading
 import time
 
+from datetime import datetime
+
 from six.moves import queue
 
 import git
@@ -150,14 +152,14 @@ def decode_millis(millis):
     return (secs, minutes)
 
 
-def detail_actor(actor):
-    return {
-        'name': actor.name,
-        'email': actor.email,
-    }
-
-
 def detail_commit(commit):
+
+    def detail_actor(actor):
+        return {
+            'name': actor.name,
+            'email': actor.email,
+        }
+
     return {
         'summary': commit.summary,
         'message': commit.message,
@@ -165,6 +167,10 @@ def detail_commit(commit):
         'type': commit.type,
         'committer': detail_actor(commit.committer),
         'author': detail_actor(commit.author),
+        'dates': {
+            'committed': datetime.fromtimestamp(commit.committed_date),
+            'authored': datetime.fromtimestamp(commit.authored_date),
+        },
     }
 
 
