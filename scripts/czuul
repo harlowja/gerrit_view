@@ -150,6 +150,24 @@ def decode_millis(millis):
     return (secs, minutes)
 
 
+def detail_actor(actor):
+    return {
+        'name': actor.name,
+        'email': actor.email,
+    }
+
+
+def detail_commit(commit):
+    return {
+        'summary': commit.summary,
+        'message': commit.message,
+        'sha': commit.hexsha,
+        'type': commit.type,
+        'committer': detail_actor(commit.committer),
+        'author': detail_actor(commit.author),
+    }
+
+
 def clone_project(git_server, project, code_path):
     # Create a temporary directory, clone there, then attempt to move to the
     # main directory, if the move fails, that's ok, but the initial clone
@@ -326,17 +344,7 @@ class Finder(threading.Thread):
         repo.git.checkout("FETCH_HEAD")
 
         self._change_state("Detailing %s" % (review.pretty_id))
-        description = ''
-        summary = ''
-        if repo.head.object.message:
-            description = six.text_type(repo.head.object.message)
-            summary = description.splitlines()[0]
-        return {
-            'summary': summary,
-            'description': description,
-            'committer': six.text_type(repo.head.object.committer),
-            'author': six.text_type(repo.head.object.author),
-        }
+        return detail_commit(repo.head.object)
 
     def run(self):
 
@@ -454,6 +462,7 @@ class ZuulReview(urwid.Pile):
         for item in rows:
             self.contents.append((item, (urwid.WEIGHT, 1)))
         self.state = None
+        self.details = {}
         self.lock = threading.RLock()
         ident_pieces = [
             self.review_id,
@@ -478,6 +487,7 @@ class ZuulReview(urwid.Pile):
 
     def on_details(self, details):
         with self.lock:
+            self.details.update(details)
             extra_rows = []
             summary = details.get("summary")
             if summary:
