@@ -487,6 +487,8 @@ class ZuulReview(urwid.Pile):
 
     def on_details(self, details):
         with self.lock:
+            if self.state == 'detailed':
+                return
             self.details.update(details)
             extra_rows = []
             summary = details.get("summary")
