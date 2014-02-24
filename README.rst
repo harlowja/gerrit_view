@@ -67,7 +67,7 @@ Examples
 
     $ qgerrit -l harlowja -a c0,v0 neutron
 
-(Thanks to Daniel Berrangé for the above two examples)
+(Thanks to Daniel Berrange for the above two examples)
 
 
 cgerrit
