@@ -370,8 +370,6 @@ class Finder(threading.Thread):
                 running = False
                 thread.interrupt_main()
             except ValueError:
-                LOG.exception("Invalid data encountered while processing"
-                              " review: %s", review)
                 with review.lock:
                     review.state = 'ignored'
             except Exception:
