@@ -219,8 +219,12 @@ def matches_file(result, files):
 
 
 #
-# approval == vN - verification passed value N
-# approval == cN - code review passed value N
+# approval == {v,c,a}NN  (v == verified, c == code review, a == approved)
+#
+# NN == -1 -> patches without any -2
+# NN == 0 -> patches without any -1 or -2
+# NN == 1 -> patches without any -1 or -2 and at least one +1
+# NN == 2 -> patches without any -1 or -2 and at least one +2
 #
 def matches_approval(result, approval):
     rules = approval.split(",")
@@ -233,28 +237,75 @@ def matches_approval(result, approval):
     except (KeyError, TypeError):
         approvals = []
 
+    # Record lowest and highest values
     got = {
-        'c': 0,
-        'v': 0,
+        'c': [0, 0],
+        'v': [0, 0],
+        'a': [0, 0],
     }
     for approval in approvals:
         got_type = approval["type"][0:1].lower()
         got_val = int(approval["value"])
 
-        # Record lowest flag value
-        if got_type not in got or got[got_type] > got_val:
-            got[got_type] = got_val
+        if got_type not in got:
+            continue
+
+        # Record lowest + highest flag values
+        if got[got_type][0] > got_val:
+            got[got_type][0] = got_val
+        if got[got_type][1] < got_val:
+            got[got_type][1] = got_val
 
     for rule in requires.keys():
         if rule not in got:
             return False
-        if got[rule] < requires[rule]:
+        if requires[rule] >= 0:
+            if got[rule][0] < 0:
+                return False
+        else:
+            if got[rule][0] < requires[rule]:
+                return False
+        if got[rule][1] < requires[rule]:
             return False
 
     return True
 
 
-def get_info(loginname, keyfile, terms, approval, port, hostname, files):
+def matches_reviewer(result, reviewers):
+    include = []
+    exclude = []
+
+    for reviewer in reviewers:
+        if reviewer[0] == '^':
+            exclude.append(reviewer[1:])
+        else:
+            include.append(reviewer)
+
+    try:
+        approvals = result["currentPatchSet"]["approvals"]
+    except (KeyError, TypeError):
+        approvals = []
+
+    got = []
+    wantPatch = False
+    for approval in approvals:
+        if "username" not in approval["by"]:
+            continue
+        who = approval["by"]["username"]
+        got.append(who)
+
+    for reviewer in include:
+        if not reviewer in got:
+            return False
+
+    for reviewer in exclude:
+        if reviewer in got:
+            return False
+
+    return True
+
+
+def get_info(loginname, keyfile, terms, approval, reviewers, port, hostname, files):
     clauses = []
     for term in terms:
         if len(terms[term]) == 0:
@@ -269,6 +320,9 @@ def get_info(loginname, keyfile, terms, approval, port, hostname, files):
         results = filter(lambda result: matches_file(result, files), results)
     if approval is not None:
         results = filter(lambda result: matches_approval(result, approval),
+                         results)
+    if len(reviewers) > 0:
+        results = filter(lambda result: matches_reviewer(result, reviewers),
                          results)
     return results
 
@@ -345,6 +399,9 @@ def main():
                       help="connect to gerrit with USER", metavar="USER")
     parser.add_option("-u", "--user", dest="users", action='append',
                       help="gather information on given USER", metavar="USER",
+                      default=[])
+    parser.add_option("-w", "--reviewer", dest="reviewers", action='append',
+                      help="filter to patches with reviewer USER", metavar="USER",
                       default=[])
     parser.add_option("-s", "--status", dest="statuses", action='append',
                       help="gather information on given status",
@@ -440,6 +497,7 @@ def main():
                            'branch': list(uniq_itr(options.branches)),
                        },
                        options.approval,
+                       options.reviewers,
                        options.port,
                        options.instance,
                        args)
