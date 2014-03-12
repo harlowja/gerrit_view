@@ -87,7 +87,7 @@ urwid_ and the gerrit_ libraries):
     
     Options:
       -h, --help            show this help message and exit
-      -u USER, --user=USER  gerrit user [default: josh]
+      -u USER, --user=USER  gerrit user [default: harlowja]
       -s SERVER, --server=SERVER
                             gerrit server [default: review.openstack.org]
       -p PORT, --port=PORT  gerrit port [default: 29418]
@@ -96,6 +96,8 @@ urwid_ and the gerrit_ libraries):
                             gerrit ssh keyfile [default: attempt to use local
                             agent]
       --project=PROJECT     only show given projects reviews
+      -v FILE, --verbose=FILE
+                            run in verbose mode and log output to the given file
       -i COUNT, --items=COUNT
                             how many items to keep visible [default: 50]
       -r FILE, --record-file=FILE
@@ -150,6 +152,8 @@ urwid_ and the requests_ libraries):
       --details             fetch each reviews details [default: False]
       --detail-dir=CLONE_DIR
                             store git checkout locations at [default: /tmp/czuul]
+      -v FILE, --verbose=FILE
+                            run in verbose mode and log output to the given file
       --detail-git=GIT_SERVER
                             fetch git repositories from this git server [default:
                             git://git.openstack.org/]
