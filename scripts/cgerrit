@@ -35,6 +35,7 @@ import Queue
 from datetime import datetime
 
 from gerritlib import gerrit
+import paramiko
 import six
 import urwid
 from urwid.signals import connect_signal
@@ -181,6 +182,8 @@ class GerritWatcher(threading.Thread):
         self.has_prefetched = False
         self.record_file = kwargs.get("record")
         self.has_read_record = False
+        self.state = "IDLE"
+        self.failures = []
 
     def _prefetch_check(self):
         fetch_am = 1
@@ -221,22 +224,6 @@ class GerritWatcher(threading.Thread):
         self.has_prefetched = True
         return list(sorted(translated, cmp=event_sort))
 
-    def _connect_and_prefetch(self):
-        prefetched_events = []
-        try:
-            if self.gerrit is None:
-                self.gerrit = gerrit.Gerrit(self.server, self.username,
-                                            self.port, self.keyfile)
-            # NOTE(harlowja): only after the sanity query passes do we have
-            # some level of confidence that the watcher thread will actually
-            # correctly connect.
-            prefetched_events = self._prefetch_check()
-            self.gerrit.startWatching()
-            LOG.info('Start watching gerrit event stream.')
-        except Exception:
-            LOG.exception('Exception while connecting to gerrit')
-        return prefetched_events
-
     @property
     def connected(self):
         if self.gerrit is None:
@@ -247,13 +234,33 @@ class GerritWatcher(threading.Thread):
             return False
         return True
 
-    def _attempt_connect_and_prefetch(self):
-        if self.connected:
-            return []
-        prefetched_events = []
+    def _connect_and_prefetch(self):
+
+        def connect():
+            if self.gerrit is None:
+                self.gerrit = gerrit.Gerrit(self.server, self.username,
+                                            self.port, self.keyfile)
+            # NOTE(harlowja): only after the sanity query passes do we have
+            # some level of confidence that the watcher thread will actually
+            # correctly connect.
+            events = self._prefetch_check()
+            self.gerrit.startWatching()
+            LOG.info('Started watching gerrit event stream.')
+            return events
+
+        events = []
+        failures = []
         for i in xrange(0, BACKOFF_ATTEMPTS):
-            prefetched_events = self._connect_and_prefetch()
-            if not self.connected:
+            retry = True
+            try:
+                events = connect()
+            except paramiko.SSHException:
+                # Likely this will not be fixed by retrying...
+                failures.append(sys.exc_info())
+                retry = False
+            except Exception:
+                failures.append(sys.exc_info())
+            if not self.connected and retry:
                 sleep_time = 2**i
                 if i + 1 < BACKOFF_ATTEMPTS:
                     LOG.warn("Trying connection again in %s seconds",
@@ -261,9 +268,7 @@ class GerritWatcher(threading.Thread):
                 time.sleep(sleep_time)
             else:
                 break
-        if not self.connected:
-            LOG.fatal("Could not connect to %s:%s", self.server, self.port)
-        return prefetched_events
+        return (failures, events)
 
     def _handle_event(self, event):
         LOG.debug('Placing event on producer queue: %s', event)
@@ -325,16 +330,25 @@ class GerritWatcher(threading.Thread):
                 self.gerrit = None
 
     def run(self):
-        while True:
-            prefetch_events = self._attempt_connect_and_prefetch()
-            if not self.has_read_record:
-                for event in self._consume_record():
-                    self._handle_event(event)
-                self.has_read_record = True
-            for event in prefetch_events:
-                self._handle_event(event)
-                self._record_event(event)
-            self._consume()
+        self.state = "CONNECTING"
+        failures, events = self._connect_and_prefetch()
+        if self.connected:
+            self.state = "CONSUMING"
+            while True:
+                if not self.connected:
+                    break
+                else:
+                    if not self.has_read_record:
+                        for event in self._consume_record():
+                            self._handle_event(event)
+                        self.has_read_record = True
+                    for event in events:
+                        self._handle_event(event)
+                        self._record_event(event)
+                    self._consume()
+        else:
+            self.failures.extend(failures)
+        self.state = "DEAD"
 
 
 def _consume_queue(queue):
@@ -831,7 +845,6 @@ def main():
     event_queue = Queue.Queue(maxsize=QUEUE_MAX_SIZE)
     gerrit_reader = GerritWatcher(event_queue, **gerrit_config)
     gerrit_details = collections.defaultdict(int)
-
     review_table = ReviewTable(max_size=options.back)
     frame = SizingFrame(review_table)
     frame.left_footer.set_text("Initializing...")
@@ -882,8 +895,8 @@ def main():
                                      gerrit_details.get('change-restored', 0),
                                      gerrit_details.get('change-abandoned', 0))
         frame.right_footer.set_text(detail_text)
-        if gerrit_reader.is_alive():
-            if not gerrit_reader.connected:
+        if gerrit_reader.state in ['CONNECTING', 'CONSUMING']:
+            if gerrit_reader.state == 'CONNECTING':
                 frame.left_footer.set_text("Connecting...")
             else:
                 if events == 0:
@@ -891,7 +904,15 @@ def main():
                 else:
                     frame.left_footer.set_text("Processing events...")
         else:
-            frame.left_footer.set_text("Initializing...")
+            if gerrit_reader.state == 'DEAD':
+                if gerrit_reader.failures:
+                    exc_info = gerrit_reader.failures[-1]
+                    raise exc_info[0], exc_info[1], exc_info[2]
+                else:
+                    raise IOError("The gerrit connection could "
+                                  "not be established.")
+            else:
+                frame.left_footer.set_text("Initializing...")
 
     def process_gerrit(loop, user_data):
         evs = _consume_queue(event_queue)
