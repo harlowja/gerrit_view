@@ -40,9 +40,6 @@ import requests
 import six
 import urwid
 
-logging.basicConfig(level=logging.ERROR,
-                    format='%(asctime)s %(levelname)s: %(message)s',
-                    stream=sys.stderr)
 LOG = logging.getLogger(__name__)
 
 ### DEFAULT SETTINGS
@@ -978,6 +975,17 @@ class ZuulFrame(urwid.Frame):
         self.center_footer.set_text(text)
 
 
+def setup_logging(filename):
+    if not filename:
+        logging.basicConfig(level=logging.ERROR,
+                            format='%(asctime)s %(levelname)s: %(message)s',
+                            stream=sys.stderr)
+    else:
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(asctime)s %(levelname)s: %(message)s',
+                            filename=filename)
+
+
 def refresh_zuul(loop, frame):
     frame.refresh(loop.screen, loop.screen_size)
 
@@ -1016,6 +1024,9 @@ def main():
                       help="store git checkout locations at"
                            " [default: %default]",
                       default=os.path.join(tempfile.gettempdir(), 'czuul'))
+    parser.add_option("-v", "--verbose", dest="verbose_where", action='store',
+                      help="run in verbose mode and log output to the given file",
+                      metavar="FILE", default=None)
     parser.add_option("--detail-git", dest="git_server", action='store',
                       help="fetch git repositories from this git"
                            " server [default: %default]",
@@ -1041,6 +1052,8 @@ def main():
             parser.error("missing required cloning directory")
         if not os.path.isdir(options.clone_dir):
             os.makedirs(options.clone_dir)
+
+    setup_logging(options.verbose_where)
     frame = ZuulFrame(options)
     frame.start()
     loop = urwid.MainLoop(frame, PALETTE,
