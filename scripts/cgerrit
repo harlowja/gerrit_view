@@ -40,9 +40,6 @@ import urwid
 from urwid.signals import connect_signal
 from urwid import widget
 
-logging.basicConfig(level=logging.ERROR,
-                    format='%(asctime)s %(levelname)s: %(message)s',
-                    stream=sys.stderr)
 LOG = logging.getLogger(__name__)
 
 ### DEFAULT SETTINGS
@@ -800,6 +797,17 @@ class SizingFrame(urwid.Frame):
 ###
 
 
+def setup_logging(filename):
+    if not filename:
+        logging.basicConfig(level=logging.ERROR,
+                            format='%(asctime)s %(levelname)s: %(message)s',
+                            stream=sys.stderr)
+    else:
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(asctime)s %(levelname)s: %(message)s',
+                            filename=filename)
+
+
 def main():
     parser = optparse.OptionParser()
     parser.add_option("-u", "--user", dest="username", action='store',
@@ -820,6 +828,9 @@ def main():
     parser.add_option("--project", dest="projects", action='append',
                       help="only show given projects reviews",
                       metavar="PROJECT", default=[])
+    parser.add_option("-v", "--verbose", dest="verbose_where", action='store',
+                      help="run in verbose mode and log output to the given file",
+                      metavar="FILE", default=None)
     parser.add_option("-i", "--items", dest="back", action='store',
                       type="int",
                       help="how many items to keep visible"
@@ -833,6 +844,8 @@ def main():
     (options, args) = parser.parse_args()
     if options.back <= 0:
         parser.error("Item count must be greater or equal to one.")
+
+    setup_logging(options.verbose_where)
     gerrit_config = {
         'keyfile': options.keyfile,
         'port': int(options.port),
