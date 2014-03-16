@@ -70,7 +70,6 @@ PALETTE = (
     ('smooth', urwid.WHITE, urwid.LIGHT_BLUE),
     # Column usage
     ('selected', urwid.DARK_GRAY, urwid.DEFAULT),
-    ('selected_job', urwid.LIGHT_BLUE, urwid.DEFAULT),
 )
 LEFT_RIGHT_KEYS = (urwid.CURSOR_LEFT, urwid.CURSOR_RIGHT)
 MOVE_KEYS = list(LEFT_RIGHT_KEYS)
@@ -460,10 +459,44 @@ class ZuulReviewJob(urwid.Pile):
     def keypress(self, size, key):
         return key
 
+    def _create_expand_widget(self):
+
+        def title_format(text):
+            if not text:
+                return None
+            return text.lower().title()
+
+        display = [
+            ('Result', self.result, True, title_format),
+            ('Voting', self.voting, False, lambda v: v),
+            ('Url', self.url, True, lambda v: v),
+        ]
+        raw_keys = []
+        keys = []
+        values = []
+        for (key, value, check, formatter) in display:
+            value = formatter(value)
+            if check and not value:
+                continue
+            key = key + ":"
+            raw_keys.append(key)
+            keys.append(urwid.Text(six.text_type(key)))
+            values.append(urwid.Text(six.text_type(value)))
+        if not raw_keys:
+            return None
+        else:
+            max_key_length = len(max(raw_keys, key=len))
+            keys_widget = urwid.Padding(urwid.Pile(keys), left=2)
+            cols = [
+                (urwid.FIXED, max_key_length + 2, keys_widget),
+                (urwid.WEIGHT, 1, urwid.Pile(values)),
+            ]
+            return urwid.Columns(cols, dividechars=1)
+
     def expand(self):
-        if self.url:
-            u = urwid.Text(" * %s" % (self.url))
-            self.contents.append((u, (urwid.WEIGHT, 1)))
+        w = self._create_expand_widget()
+        if w is not None:
+            self.contents.append((w, (urwid.WEIGHT, 1)))
             self.expanded = True
 
     def collapse(self):
@@ -628,7 +661,7 @@ class ZuulReview(urwid.Pile):
                 job = ZuulReviewJob(job_name)
                 self.jobs.append(job)
                 (p_bar, p_bar_options) = self.contents.pop()
-                w = urwid.AttrMap(job, None, 'selected_job')
+                w = urwid.AttrMap(job, 'selected', 'body')
                 self.contents.append((w, (urwid.WEIGHT, 1)))
                 self.contents.append((p_bar, p_bar_options))
             millis, failure = job.refresh(job_data)
@@ -796,6 +829,7 @@ class MultiColumns(urwid.Columns):
         if len(size) == 1 and b:
             key = w.keypress((mc, self.rows(size, True)), key)
         else:
+            LOG.debug("Calling keypress on %s", w)
             key = w.keypress((mc,) + size[1:], key)
         m_key = self._command_map[key]
         if m_key not in LEFT_RIGHT_KEYS:
@@ -893,14 +927,13 @@ class Renderer(threading.Thread):
             c = columns.place(pipes[name]['pipeline'], maxrow, maxcol)
             columns_placed.append(c)
             for r in reversed(sorted(pipes[name]['reviews'], cmp=cmp_reviews)):
-                w = urwid.AttrMap(r, 'selected', 'body')
+                w = urwid.AttrMap(r, "selected", "body")
                 c = columns.place(w, maxrow, maxcol)
                 columns_placed.append(c)
-
-        if columns_placed:
-            for i, (w, _details) in enumerate(columns_placed[0].contents):
+        for column in columns_placed:
+            for i, (w, details) in enumerate(column.contents):
                 if w.selectable():
-                    columns_placed[0].focus_position = i
+                    column.focus_position = i
                     break
 
         fetch_id = zuul_data['fetch_count']
