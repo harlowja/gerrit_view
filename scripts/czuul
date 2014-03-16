@@ -506,6 +506,7 @@ class ZuulReviewJob(urwid.Pile):
 
     def refresh(self, raw_data):
         self.collapse()
+        self.url = raw_data.get("url")
         self.result = raw_data.get("result")
         self.voting = bool(raw_data.get("voting"))
         failure = False
