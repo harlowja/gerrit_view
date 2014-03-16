@@ -560,7 +560,6 @@ class ZuulReview(urwid.Pile):
                 i = i - 1
             if i >= 0:
                 self.focus_position = i
-                self.contents[i][0].keypress(size, key)
                 return None
         if m_key == urwid.CURSOR_DOWN:
             i = self.focus_position + 1
@@ -570,7 +569,6 @@ class ZuulReview(urwid.Pile):
                 i = i + 1
             if i < len(self.contents):
                 self.focus_position = i
-                self.contents[i][0].keypress(size, key)
                 return None
         if m_key == urwid.ACTIVATE:
             i = self.focus_position
