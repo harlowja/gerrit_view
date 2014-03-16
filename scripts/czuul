@@ -70,6 +70,7 @@ PALETTE = (
     ('smooth', urwid.WHITE, urwid.LIGHT_BLUE),
     # Column usage
     ('selected', urwid.DARK_GRAY, urwid.DEFAULT),
+    ('selected_job', urwid.LIGHT_BLUE, urwid.DEFAULT),
 )
 LEFT_RIGHT_KEYS = (urwid.CURSOR_LEFT, urwid.CURSOR_RIGHT)
 MOVE_KEYS = list(LEFT_RIGHT_KEYS)
@@ -435,6 +436,63 @@ class Watcher(threading.Thread):
                     self._state = None
 
 
+class ZuulReviewJob(urwid.Pile):
+    ignore_focus = False
+
+    def __init__(self, name):
+        super(ZuulReviewJob, self).__init__([])
+        self.name = name
+        self.remaining = urwid.AttrMap(urwid.Text("", align='right'), 'ok')
+        name = urwid.Text("- %s" % name, align='left')
+        rows = [
+            name,
+            (urwid.WEIGHT, 0.333, self.remaining),
+        ]
+        self.contents.append((urwid.Columns(rows), (urwid.WEIGHT, 1)))
+        self.expanded = False
+        self.url = None
+        self.voting = False
+        self.result = None
+
+    def selectable(self):
+        return True
+
+    def keypress(self, size, key):
+        return key
+
+    def expand(self):
+        if self.url:
+            u = urwid.Text(" * %s" % (self.url))
+            self.contents.append((u, (urwid.WEIGHT, 1)))
+            self.expanded = True
+
+    def collapse(self):
+        if self.expanded:
+            self.contents.pop()
+            self.expanded = False
+
+    def refresh(self, raw_data):
+        self.result = raw_data.get("result")
+        self.voting = bool(raw_data.get("voting"))
+        if self.url != raw_data.get("url"):
+            self.url = raw_data.get("url")
+            self.collapse()
+        failure = False
+        millis = get_int_key("remaining_time", raw_data)
+        (secs, mins) = decode_millis(millis)
+        time_add_on = ""
+        if self.result in JOB_RESULT_FAILURES and self.voting:
+            time_attr = 'dead'
+            time_add_on = '!'
+            failure = True
+        else:
+            time_attr = select_time_attr(secs)
+        remaining = self.remaining.original_widget
+        remaining.set_text(format_time(secs, mins) + time_add_on)
+        self.remaining.set_attr_map({None: time_attr})
+        return (millis, failure)
+
+
 class ZuulReview(urwid.Pile):
     ignore_focus = False
 
@@ -448,7 +506,7 @@ class ZuulReview(urwid.Pile):
             self.review_id = review_id
         self.project = project
         self.pipeline = pipeline
-        self.jobs = {}
+        self.jobs = []
         self.zuul_ref = zuul_ref
         self.progress_bar = urwid.ProgressBar('normal', 'complete',
                                               0.0, 1.0, 'smooth')
@@ -492,6 +550,43 @@ class ZuulReview(urwid.Pile):
         return True
 
     def keypress(self, size, key):
+        m_key = self._command_map[key]
+        LOG.debug("Key %s (%s) pressed on %s", key, m_key, self)
+        if m_key == urwid.CURSOR_UP:
+            i = self.focus_position - 1
+            while i >= 0:
+                if self.contents[i][0].selectable():
+                    break
+                i = i - 1
+            if i >= 0:
+                self.focus_position = i
+                self.contents[i][0].keypress(size, key)
+                return None
+        if m_key == urwid.CURSOR_DOWN:
+            i = self.focus_position + 1
+            while i < len(self.contents):
+                if self.contents[i][0].selectable():
+                    break
+                i = i + 1
+            if i < len(self.contents):
+                self.focus_position = i
+                self.contents[i][0].keypress(size, key)
+                return None
+        if m_key == urwid.ACTIVATE:
+            i = self.focus_position
+            if i < len(self.contents) and i >= 0:
+                try:
+                    w = self.contents[i][0].original_widget
+                except AttributeError:
+                    w = None
+                if isinstance(w, ZuulReviewJob):
+                    if w.expanded:
+                        LOG.debug("Collapsing %s", w.name)
+                        w.collapse()
+                    else:
+                        LOG.debug("Expanding %s", w.name)
+                        w.expand()
+                    return None
         return key
 
     def on_details(self, details):
@@ -520,43 +615,27 @@ class ZuulReview(urwid.Pile):
             pass
 
     def refresh(self, raw_data):
-        new_jobs = []
         remaining_millis = []
-        failure_count = 0
-        for j in raw_data.get("jobs", []):
-            if not j.get("name"):
+        failures = 0
+        for job_data in raw_data.get("jobs", []):
+            if not job_data.get("name"):
                 continue
-            job_name = six.text_type(j.get('name'))
-            millis = get_int_key("remaining_time", j)
+            job_name = six.text_type(job_data['name'])
+            job = None
+            for j in self.jobs:
+                if j.name == job_name:
+                    job = j
+                    break
+            if job is None:
+                job = ZuulReviewJob(job_name)
+                self.jobs.append(job)
+                (p_bar, p_bar_options) = self.contents.pop()
+                w = urwid.AttrMap(job, None, 'selected_job')
+                self.contents.append((w, (urwid.WEIGHT, 1)))
+                self.contents.append((p_bar, p_bar_options))
+            millis, failure = job.refresh(job_data)
+            failures += int(failure)
             remaining_millis.append(millis)
-            (secs, mins) = decode_millis(millis)
-            time_add_on = ""
-            if j.get("result") in JOB_RESULT_FAILURES and j.get("voting"):
-                time_attr = 'dead'
-                time_add_on = "!"
-                failure_count += 1
-            else:
-                time_attr = select_time_attr(secs)
-            time_txt = format_time(secs, mins) + time_add_on
-            if job_name in self.jobs:
-                (name, remaining) = self.jobs[job_name]
-                remaining_txt = remaining.original_widget
-                remaining_txt.set_text(time_txt)
-                remaining.set_attr_map({None: time_attr})
-            else:
-                remaining_txt = urwid.Text(time_txt, align='right')
-                self.jobs[job_name] = [
-                    urwid.Text("- %s" % job_name, align='left'),
-                    urwid.AttrMap(remaining_txt, time_attr),
-                ]
-                new_jobs.append(job_name)
-        if new_jobs:
-            (p_bar, p_bar_options) = self.contents.pop()
-            for job_name in sorted(new_jobs):
-                (name_txt, time_txt) = self.jobs[job_name]
-                rows = [name_txt, (urwid.WEIGHT, 0.333, time_txt)]
-                self.contents.append((urwid.Columns(rows), (urwid.WEIGHT, 1)))
-            self.contents.append((p_bar, p_bar_options))
         self.progress_bar.set_completion(calculate_completion(raw_data))
         if remaining_millis:
             max_remaining_millis = max(remaining_millis)
@@ -568,7 +647,7 @@ class ZuulReview(urwid.Pile):
             ('clear', "ETA ["),
             ('clear', "]"),
         ]
-        if failure_count:
+        if failures > 0:
             time_attr = 'dead'
             time_txt += "!"
         else:
