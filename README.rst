@@ -109,7 +109,8 @@ Keys supported
 ##############
 
 * (S, s) - Change sort mode (default none)
-* (q, Q, esc) - Quit                      
+* (q, Q, esc) - Quit   
+* (up, down, page up, page down) - Scroll up/down
 
 ########
 Examples
@@ -167,6 +168,10 @@ Keys supported
 
 * (R, r) - Force refresh
 * (q, Q, esc) - Quit
+* (up, down, page up, page down) - Scroll up/down
+* (left, right) - Scroll left/right
+* (enter) - show job details
+
 
 ########
 Examples
