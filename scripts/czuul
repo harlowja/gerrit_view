@@ -442,9 +442,9 @@ class ZuulReviewJob(urwid.Pile):
         super(ZuulReviewJob, self).__init__([])
         self.name = name
         self.remaining = urwid.AttrMap(urwid.Text("", align='right'), 'ok')
-        name = urwid.Text("- %s" % name, align='left')
+        self.name_widget = urwid.Text("- %s" % name, align='left')
         rows = [
-            name,
+            self.name_widget,
             (urwid.WEIGHT, 0.333, self.remaining),
         ]
         self.contents.append((urwid.Columns(rows), (urwid.WEIGHT, 1)))
@@ -466,41 +466,40 @@ class ZuulReviewJob(urwid.Pile):
                 return None
             return text.lower().title()
 
+        filler_size = 3
         display = [
             ('Result', self.result, True, title_format),
             ('Voting', self.voting, False, lambda v: v),
             ('Url', self.url, True, lambda v: v),
         ]
-        raw_keys = []
-        keys = []
-        values = []
+        filler = []
+        keys_values = []
         for (key, value, check, formatter) in display:
             value = formatter(value)
             if check and not value:
                 continue
-            key = key + ":"
-            raw_keys.append(key)
-            keys.append(urwid.Text(six.text_type(key)))
-            values.append(urwid.Text(six.text_type(value)))
-        if not raw_keys:
+            keys_values.append(urwid.Text("%s - %s" % (key, value),
+                                          wrap='any'))
+            filler.append(urwid.Text(" " * filler_size))
+        if not keys_values:
             return None
         else:
-            max_key_length = len(max(raw_keys, key=len))
-            keys_widget = urwid.Padding(urwid.Pile(keys), left=2)
             cols = [
-                (urwid.FIXED, max_key_length + 2, keys_widget),
-                (urwid.WEIGHT, 1, urwid.Pile(values)),
+                (urwid.FIXED, filler_size, urwid.Pile(filler)),
+                urwid.Pile(keys_values),
             ]
-            return urwid.Columns(cols, dividechars=1)
+            return urwid.Columns(cols)
 
     def expand(self):
         w = self._create_expand_widget()
         if w is not None:
+            self.name_widget.set_text("+ %s" % self.name)
             self.contents.append((w, (urwid.WEIGHT, 1)))
             self.expanded = True
 
     def collapse(self):
         if self.expanded:
+            self.name_widget.set_text("- %s" % self.name)
             self.contents.pop()
             self.expanded = False
 
