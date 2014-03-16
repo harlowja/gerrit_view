@@ -504,11 +504,28 @@ class ZuulReviewJob(urwid.Pile):
             self.contents.pop()
             self.expanded = False
 
+    def refresh_expanded(self, raw_data):
+
+        def has_changed():
+            url = raw_data.get("url")
+            if url != self.url:
+                return True
+            result = raw_data.get("result")
+            if result != self.result:
+                return True
+            voting = raw_data.get("voting")
+            if voting != self.voting:
+                return True
+            return False
+
+        if has_changed():
+            self.collapse()
+
     def refresh(self, raw_data):
-        self.collapse()
+        self.refresh_expanded(raw_data)
         self.url = raw_data.get("url")
         self.result = raw_data.get("result")
-        self.voting = bool(raw_data.get("voting"))
+        self.voting = raw_data.get("voting")
         failure = False
         millis = get_int_key("remaining_time", raw_data)
         (secs, mins) = decode_millis(millis)
