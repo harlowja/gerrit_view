@@ -223,6 +223,8 @@ def matches_file(result, files):
 #
 # NN == -1 -> patches without any -2
 # NN == 0 -> patches without any -1 or -2
+# NN == =0 -> no values other than 0, useful for querying for patches not
+#             approved using "a=0".
 # NN == 1 -> patches without any -1 or -2 and at least one +1
 # NN == 2 -> patches without any -1 or -2 and at least one +2
 #
@@ -230,7 +232,19 @@ def matches_approval(result, approval):
     rules = approval.split(",")
     requires = {}
     for rule in rules:
-        requires[rule[0:1]] = int(rule[1:])
+        try:
+            requires[rule[0:1]] = {
+                'value': int(rule[1:]),
+                'type': 'min',
+            }
+        except ValueError:
+            if rule[1:2] == '=':
+                requires[rule[0:1]] = {
+                    'value': int(rule[2:]),
+                    'type': 'exact',
+                }
+            else:
+                raise
 
     try:
         approvals = result["currentPatchSet"]["approvals"]
@@ -257,16 +271,23 @@ def matches_approval(result, approval):
             got[got_type][1] = got_val
 
     for rule in requires.keys():
-        if rule not in got:
-            return False
-        if requires[rule] >= 0:
-            if got[rule][0] < 0:
+        if requires[rule]['type'] == 'min':
+            if rule not in got:
                 return False
-        else:
-            if got[rule][0] < requires[rule]:
+            if requires[rule]['value'] >= 0:
+                if got[rule][0] < 0:
+                    return False
+            else:
+                if got[rule][0] < requires[rule]['value']:
+                    return False
+            if got[rule][1] < requires[rule]['value']:
                 return False
-        if got[rule][1] < requires[rule]:
-            return False
+        elif requires[rule]['type'] == 'exact':
+            if rule not in got and requires[rule]['value'] == 0:
+                continue
+            if (got[rule][0] != requires[rule]['value'] or
+                    got[rule][1] != requires[rule]['value']):
+                return False
 
     return True
 
