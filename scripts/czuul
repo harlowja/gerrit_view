@@ -850,11 +850,13 @@ class MultiColumns(urwid.Columns):
         else:
             key = w.keypress((mc,) + size[1:], key)
         m_key_after = self._command_map[key]
+        auto_shifted = False
         if all([m_key in UP_DOWN_KEYS, m_key_after in UP_DOWN_KEYS]):
             if m_key == urwid.CURSOR_UP:
                 m_key = urwid.CURSOR_LEFT
             else:
                 m_key = urwid.CURSOR_RIGHT
+            auto_shifted = True
         if m_key not in LEFT_RIGHT_KEYS:
             return key
         k = i
@@ -886,6 +888,14 @@ class MultiColumns(urwid.Columns):
             if not self.contents[j][0].selectable():
                 continue
             self.focus_position = j
+            if auto_shifted:
+                for (c, w) in self.columns:
+                    if c == self.contents[self.focus_position][0]:
+                        for k in reversed(range(0, len(c.contents))):
+                            if not c.contents[k].selectable():
+                                continue
+                            c.focus_position = k
+                            break
             return None
         return key
 
