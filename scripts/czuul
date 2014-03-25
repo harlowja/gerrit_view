@@ -72,13 +72,15 @@ PALETTE = (
     ('selected', urwid.DARK_GRAY, urwid.DEFAULT),
 )
 LEFT_RIGHT_KEYS = (urwid.CURSOR_LEFT, urwid.CURSOR_RIGHT)
-MOVE_KEYS = list(LEFT_RIGHT_KEYS)
+UP_DOWN_KEYS = (urwid.CURSOR_UP, urwid.CURSOR_DOWN)
+MOVE_KEYS = list(LEFT_RIGHT_KEYS) + list(UP_DOWN_KEYS)
 MOVE_KEYS.extend([
-    urwid.CURSOR_UP,
-    urwid.CURSOR_DOWN,
     urwid.CURSOR_PAGE_UP,
     urwid.CURSOR_PAGE_DOWN,
+    urwid.CURSOR_MAX_LEFT,
+    urwid.CURSOR_MAX_RIGHT,
 ])
+MOVE_KEYS = tuple(MOVE_KEYS)
 QUIT_KEYS = ('q', 'Q', 'esc')
 REFRESH_KEYS = ('r', 'R')
 
@@ -841,12 +843,18 @@ class MultiColumns(urwid.Columns):
         i = self.focus_position
         mc = widths[i]
         w, (t, n, b) = self.contents[i]
+        m_key = self._command_map[key]
+        LOG.debug("Calling keypress (%s) on %s", m_key, w)
         if len(size) == 1 and b:
             key = w.keypress((mc, self.rows(size, True)), key)
         else:
-            LOG.debug("Calling keypress on %s", w)
             key = w.keypress((mc,) + size[1:], key)
-        m_key = self._command_map[key]
+        m_key_after = self._command_map[key]
+        if all([m_key in UP_DOWN_KEYS, m_key_after in UP_DOWN_KEYS]):
+            if m_key == urwid.CURSOR_UP:
+                m_key = urwid.CURSOR_LEFT
+            else:
+                m_key = urwid.CURSOR_RIGHT
         if m_key not in LEFT_RIGHT_KEYS:
             return key
         k = i
