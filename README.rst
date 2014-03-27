@@ -51,7 +51,7 @@ based on a set of criteria/filters::
 Examples
 ########
 
-1. To eunmerate all reviews requests for openstack/nova which touch a
+1. To enumerate all reviews requests for openstack/nova which touch a
    file with libvirt in the name::
 
     $ qgerrit \
