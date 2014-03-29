@@ -87,6 +87,8 @@ REFRESH_KEYS = ('r', 'R')
 # Other constants
 NO_DETAIL_STATES = ('detailed', 'detailing', 'ignored', 'errored')
 JOB_RESULT_FAILURES = ('FAILURE',)
+START = 'start'
+END = 'end'
 
 
 @contextlib.contextmanager
@@ -838,6 +840,56 @@ class MultiColumns(urwid.Columns):
         return True
 
     def keypress(self, size, key):
+
+        def o_w(w):
+            try:
+                return w.original_widget
+            except AttributeError:
+                return w
+
+        def autoshift_refocus(m_key):
+            LOG.debug("Autofocusing in response to %s", m_key)
+            w = self.contents[self.focus_position][0]
+            LOG.debug("Focus @ %s", w)
+            if m_key == urwid.CURSOR_RIGHT:
+                target = START
+            else:
+                target = END
+            col = None
+            for (c, w2) in self.columns:
+                if w2 == w:
+                    col = c
+                    break
+            if col is None:
+                return
+            LOG.debug("At column %s (%s)", col, len(col.contents))
+            if target == START:
+                candidates = list(range(0, len(col.contents)))
+            else:
+                candidates = list(reversed(range(0, len(col.contents))))
+            first_focus = -1
+            for i in candidates:
+                c_w = o_w(col.contents[i][0])
+                adjusted = False
+                if isinstance(c_w, ZuulReview):
+                    if target == END:
+                        subcandidates = list(reversed(range(0, len(c_w.contents))))
+                    else:
+                        subcandidates = list((range(0, len(c_w.contents))))
+                    for j in subcandidates:
+                        c_j = o_w(c_w.contents[j][0])
+                        if isinstance(c_j, ZuulReviewJob):
+                            if c_j.selectable:
+                                c_w.focus_position = j
+                                adjusted = True
+                                LOG.debug("Reset focus of %s to %s", c_w, j)
+                                break
+                if adjusted and first_focus == -1:
+                    first_focus = i
+            if first_focus != -1:
+                LOG.debug("Reset focus of %s to %s", col, first_focus)
+                col.focus_position = first_focus
+
         if key is None:
             return
         if self.focus_position is None:
@@ -855,7 +907,9 @@ class MultiColumns(urwid.Columns):
         else:
             key = w.keypress((mc,) + size[1:], key)
         m_key_after = self._command_map[key]
+        autoshifted = False
         if all([m_key in UP_DOWN_KEYS, m_key_after in UP_DOWN_KEYS]):
+            autoshifted = True
             if m_key == urwid.CURSOR_UP:
                 m_key = urwid.CURSOR_LEFT
             else:
@@ -872,6 +926,8 @@ class MultiColumns(urwid.Columns):
         if k == 0:
             if m_key == urwid.CURSOR_LEFT:
                 if self.shift_contents_right():
+                    if autoshifted:
+                        autoshift_refocus(m_key)
                     return None
         if k + 1 == content_len:
             if m_key == urwid.CURSOR_RIGHT:
@@ -881,6 +937,8 @@ class MultiColumns(urwid.Columns):
                             continue
                         self.focus_position = m
                         break
+                    if autoshifted:
+                        autoshift_refocus(m_key)
                     return None
         candidates = []
         if m_key == urwid.CURSOR_RIGHT:
@@ -891,6 +949,8 @@ class MultiColumns(urwid.Columns):
             if not self.contents[j][0].selectable():
                 continue
             self.focus_position = j
+            if autoshifted:
+                autoshift_refocus(m_key)
             return None
         return key
 
