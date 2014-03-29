@@ -704,11 +704,10 @@ class ZuulReview(urwid.Pile):
             time_attr = select_time_attr(secs)
         time_markup.insert(1, (time_attr, time_txt))
         self.eta_text.set_text(time_markup)
-        if not self.focus_position:
-            for i, (w, attrs) in enumerate(self.contents):
-                if w.selectable():
-                    self.focus_position = i
-                    break
+        for i, (w, attrs) in enumerate(self.contents):
+            if w.selectable():
+                self.focus_position = i
+                break
 
 
 class ZuulPipeline(urwid.Pile):
