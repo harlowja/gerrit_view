@@ -50,6 +50,9 @@ ZUUL_MIN_FREQ = 5
 ALARM_FREQ = 1.0
 SCREENS = 3
 
+# Run git gc every X seconds
+GC_DELAY = 3600
+
 ### GUI CONSTANTS
 
 PALETTE = (
@@ -291,6 +294,7 @@ class Finder(threading.Thread):
         self.delayed_callbacks = frame.delayed_callbacks
         self._fetched = 0
         self._state = None
+        self._gc_times = {}
 
     def _change_state(self, state):
         with self.lock:
@@ -325,12 +329,17 @@ class Finder(threading.Thread):
             self._change_state("Cloning %s for %s" % (project,
                                                       review.pretty_id))
             repo = clone_project(self.options.git_server, project, code_path)
+            self._gc_times[code_path] = time.time() + GC_DELAY
         else:
             repo = git.Repo(code_path)
 
         self._change_state("Cleaning %s for %s" % (project, review.pretty_id))
         clear_extra_remotes(repo)
         reset_repo(repo)
+        if time.time() >= self._gc_times[code_path]:
+            self._change_state("Garbage collecting %s" % (project))
+            repo.git.gc()
+            self._gc_times[code_path] = time.time() + GC_DELAY
 
         remote_server = self.options.remote_server
         remote_server = remote_server.rstrip("/")
