@@ -329,7 +329,9 @@ class Finder(threading.Thread):
             self._change_state("Cloning %s for %s" % (project,
                                                       review.pretty_id))
             repo = clone_project(self.options.git_server, project, code_path)
-            self._gc_times[code_path] = time.time() + GC_DELAY
+            self._gc_times[code_path] = int(time.time()) + GC_DELAY
+            LOG.debug("We will clean %s sometime after %s", code_path,
+                      self._gc_times[code_path])
         else:
             repo = git.Repo(code_path)
 
@@ -339,7 +341,9 @@ class Finder(threading.Thread):
         if time.time() >= self._gc_times[code_path]:
             self._change_state("Garbage collecting %s" % (project))
             repo.git.gc()
-            self._gc_times[code_path] = time.time() + GC_DELAY
+            self._gc_times[code_path] = int(time.time()) + GC_DELAY
+            LOG.debug("We will clean %s sometime after %s", code_path,
+                      self._gc_times[code_path])
 
         remote_server = self.options.remote_server
         remote_server = remote_server.rstrip("/")
