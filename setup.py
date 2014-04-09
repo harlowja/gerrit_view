@@ -52,7 +52,7 @@ def _readme():
 
 
 setup(name='gerrit-view',
-      version='0.3.3',
+      version='0.3.4',
       description='Gerrit viewer tools',
       author="Joshua Harlow",
       author_email='harlowja@yahoo-inc.com',
