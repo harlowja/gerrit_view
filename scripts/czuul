@@ -329,11 +329,13 @@ class Finder(threading.Thread):
             self._change_state("Cloning %s for %s" % (project,
                                                       review.pretty_id))
             repo = clone_project(self.options.git_server, project, code_path)
+        else:
+            repo = git.Repo(code_path)
+
+        if code_path not in self._gc_times:
             self._gc_times[code_path] = int(time.time()) + GC_DELAY
             LOG.debug("We will clean %s sometime after %s", code_path,
                       self._gc_times[code_path])
-        else:
-            repo = git.Repo(code_path)
 
         self._change_state("Cleaning %s for %s" % (project, review.pretty_id))
         clear_extra_remotes(repo)
