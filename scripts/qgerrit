@@ -70,8 +70,8 @@ def tiny_p(cmd, capture=True, ok_rcs=(0,)):
 
 
 def server_cmd(login_name, port=GERRIT_PORT, host=GERRIT_HOST):
-    LOG.debug("port = {}".format(port))
-    LOG.debug("host = {}".format(host))
+    LOG.debug("port = %s", port)
+    LOG.debug("host = %s", host)
     pieces = []
     if login_name:
         pieces.extend(['%s@%s' % (login_name, host), '-p', port])
