@@ -47,7 +47,7 @@ LOG = logging.getLogger(__name__)
 ZUUL_URL = 'http://zuul.openstack.org/status.json'
 ZUUL_FREQ = 30
 ZUUL_MIN_FREQ = 5
-ALARM_FREQ = 1.0
+ALARM_FREQ = 0.5
 SCREENS = 3
 
 # Run git gc every X seconds
@@ -404,14 +404,16 @@ class Watcher(threading.Thread):
         self.options = frame.options
         self.daemon = True
         self.data = {}
-        self.event = threading.Event()
+        self.work = queue.Queue()
         self.lock = threading.RLock()
         self._fetches = 0
+        self._no_calls = 0
         self._state = None
+        self._last_response = None
 
     def activity(self):
         with self.lock:
-            return (self._state, self._fetches)
+            return self._state
 
     def fetch(self, url, timeout):
         response = None
@@ -427,7 +429,7 @@ class Watcher(threading.Thread):
         data = response.json()
         if isinstance(data, dict):
             with self.lock:
-                data['fetch_count'] = self._fetches
+                data['fetch_id'] = (self._fetches, self._no_calls)
                 self.data = data
         else:
             raise TypeError("Expected dict type, got '%s'" % type(data))
@@ -437,19 +439,24 @@ class Watcher(threading.Thread):
         url = self.options.server
         timeout = self.options.frequency * 0.50
         while running:
-            self.event.wait()
+            call = self.work.get(True)
             with self.lock:
-                self._fetches += 1
-                self._state = "Fetching from %s" % (url)
+                if call or not self._last_response:
+                    self._no_calls = 0
+                    self._fetches += 1
+                    self._state = "Fetching from %s" % (url)
+                else:
+                    self._no_calls += 1
             try:
-                self.process(self.fetch(url, timeout))
+                if call or not self._last_response:
+                    self._last_response = self.fetch(url, timeout)
+                self.process(self._last_response)
             except KeyboardInterrupt:
                 running = False
                 thread.interrupt_main()
             except (ValueError, TypeError):
                 LOG.exception("Failed extracting data from %s", url)
             finally:
-                self.event.clear()
                 with self.lock:
                     self._state = None
 
@@ -1038,11 +1045,11 @@ class Renderer(threading.Thread):
                     column.focus_position = i
                     break
 
-        fetch_id = zuul_data['fetch_count']
+        fetch_id, sub_fetch_id = zuul_data['fetch_id']
         detailed, awaiting, state = self.finder.activity()
-        text = "%s pipelines (%sr, %sw, %sf, %sd)"
+        text = "%s pipelines (%sr, %sw, %s.%sf, %sd)"
         text = text % (len(pipes), len(reviews),
-                       len(columns.columns), fetch_id, detailed)
+                       len(columns.columns), fetch_id, sub_fetch_id, detailed)
         return (columns, text, delayed_refresh)
 
     def run(self):
@@ -1099,7 +1106,7 @@ class ZuulFrame(urwid.Frame):
             urwid.Columns((self.left_footer,
                            self.center_footer, self.right_footer)), 'body')
         self.footer = footer
-        self.last_fetch_id = -1
+        self.last_fetch = (-1, -1)
         self.rendering = False
         self.last_refreshed = None
         self.delayed_callbacks = queue.Queue()
@@ -1110,7 +1117,7 @@ class ZuulFrame(urwid.Frame):
 
     def keypress(self, size, key):
         if key in REFRESH_KEYS:
-            self._poke_watcher()
+            self.poke()
             return None
         m_key = self._command_map[key]
         with self.lock:
@@ -1118,9 +1125,9 @@ class ZuulFrame(urwid.Frame):
                 return key
         return super(ZuulFrame, self).keypress(size, key)
 
-    def _poke_watcher(self):
+    def poke(self, fetch=True):
         LOG.debug("Poking")
-        self.watcher.event.set()
+        self.watcher.work.put(fetch)
 
     def start(self):
         with self.lock:
@@ -1138,12 +1145,12 @@ class ZuulFrame(urwid.Frame):
     def _refresh(self, screen, screen_size):
         with self.watcher.lock:
             zuul_data = self.watcher.data
-            state, fetches = self.watcher.activity()
+            state = self.watcher.activity()
 
         if not zuul_data:
             if not state:
                 text = "Waiting for initial data..."
-                self._poke_watcher()
+                self.poke()
             else:
                 text = "%s..." % (state)
             self.left_footer.set_text(text)
@@ -1158,19 +1165,20 @@ class ZuulFrame(urwid.Frame):
 
         text = ''
         if not self.rendering:
-            fetch_id = zuul_data['fetch_count']
-            if fetch_id > self.last_fetch_id:
+            fetch_id, sub_fetch_id = zuul_data['fetch_id']
+            if (fetch_id, sub_fetch_id) > self.last_fetch:
                 self.rendering = True
                 self.renderer.work.put((zuul_data, screen_size))
-                self.last_fetch_id = fetch_id
-                self.last_refreshed = time.time()
+                if self.last_fetch[0] != fetch_id:
+                    self.last_refreshed = time.time()
+                self.last_fetch = (fetch_id, sub_fetch_id)
             if not self.rendering:
                 if not state:
                     next_fetch = self.last_refreshed + self.options.frequency
                     refresh_in = int(max(0, next_fetch - time.time()))
                     text = "Refresh expected in %s seconds..." % (refresh_in)
                     if refresh_in <= 0:
-                        self._poke_watcher()
+                        self.poke()
                 else:
                     text = text = "%s..." % (state)
         if self.rendering:
@@ -1209,6 +1217,29 @@ def on_unhandled_input(key):
 
 def on_idle(loop, frame):
     loop.set_alarm_in(ALARM_FREQ, refresh_zuul, user_data=frame)
+
+
+def on_resize(loop, frame):
+    frame.poke(fetch=False)
+
+
+class MainLoop(urwid.MainLoop):
+    def __init__(self, frame):
+        super(MainLoop, self).__init__(frame, PALETTE,
+                                       handle_mouse=False,
+                                       unhandled_input=on_unhandled_input)
+        self.last_resize = time.time()
+
+    def process_input(self, keys):
+        something_handled = super(MainLoop, self).process_input(keys)
+        for k in keys:
+            if k == 'window resize':
+                now = time.time()
+                if (now - self.last_resize) >= ALARM_FREQ:
+                    self.set_alarm_in(0.05, on_resize, user_data=self.widget)
+                    self.last_resize = now
+                break
+        return something_handled
 
 
 def main():
@@ -1268,9 +1299,7 @@ def main():
     setup_logging(options.verbose_where)
     frame = ZuulFrame(options)
     frame.start()
-    loop = urwid.MainLoop(frame, PALETTE,
-                          handle_mouse=False,
-                          unhandled_input=on_unhandled_input)
+    loop = MainLoop(frame)
     loop.event_loop.enter_idle(functools.partial(on_idle, loop, frame))
     try:
         loop.run()
