@@ -21,6 +21,7 @@ import contextlib
 import errno
 import fnmatch
 import functools
+import json
 import logging
 import optparse
 import os
@@ -426,8 +427,10 @@ class Watcher(threading.Thread):
     def process(self, response):
         if not response:
             return
-        data = response.json()
+        data = json.loads(response.text)
         if isinstance(data, dict):
+            LOG.debug("Got response:\n%s",
+                      json.dumps(data, indent=4, sort_keys=True))
             with self.lock:
                 data['fetch_id'] = (self._fetches, self._no_calls)
                 self.data = data
