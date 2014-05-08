@@ -40,7 +40,7 @@ def _readme():
     # Filter out screenshots...
     lines = []
     with open(_path("README.rst"), "rb") as handle:
-        contents = handle.read()
+        contents = handle.read().decode('utf-8')
         for line in contents.splitlines():
             screenshot = False
             if _has_all(line, ['screenshots', '.png']):
