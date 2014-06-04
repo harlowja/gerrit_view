@@ -109,7 +109,7 @@ def temp_dir(**kwargs):
 
 
 def select_time_attr(secs):
-    if secs is None:
+    if not isinstance(secs, (int, float)):
         return 'superslow'
     secs = max(0, int(secs))
     if secs <= 300:
