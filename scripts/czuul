@@ -93,6 +93,7 @@ NO_DETAIL_STATES = ('detailed', 'detailing', 'ignored', 'errored')
 JOB_RESULT_FAILURES = ('FAILURE',)
 START = 'start'
 END = 'end'
+UNKNOWNS = "???"
 
 
 @contextlib.contextmanager
@@ -108,6 +109,8 @@ def temp_dir(**kwargs):
 
 
 def select_time_attr(secs):
+    if secs is None:
+        return 'superslow'
     secs = max(0, int(secs))
     if secs <= 300:
         return 'ok'
@@ -213,7 +216,7 @@ def reset_repo(repo):
 def get_int_key(k, in_what, default=0):
     try:
         return int(in_what[k])
-    except (KeyError, ValueError, TypeError):
+    except KeyError:
         return default
 
 
@@ -265,7 +268,7 @@ def iter_reviews(data, pipeline=None):
                 review_id = raw_data.get("id")
                 project = raw_data.get("project")
                 zuul_ref = raw_data.get("zuul_ref")
-                if not all([review_id, project, zuul_ref]):
+                if not all([review_id, project]):
                     continue
                 r = ZuulReview(review_id, project, zuul_ref,
                                pipeline=pipeline,
@@ -555,8 +558,12 @@ class ZuulReviewJob(urwid.Pile):
         self.result = raw_data.get("result")
         self.voting = raw_data.get("voting")
         failure = False
-        millis = get_int_key("remaining_time", raw_data)
-        (secs, mins) = decode_millis(millis)
+        try:
+            millis = get_int_key("remaining_time", raw_data)
+            secs, mins = decode_millis(millis)
+        except (TypeError, ValueError):
+            millis = None
+            secs, mins = (None, None)
         time_add_on = ""
         if self.result in JOB_RESULT_FAILURES and self.voting:
             time_attr = 'dead'
@@ -565,7 +572,10 @@ class ZuulReviewJob(urwid.Pile):
         else:
             time_attr = select_time_attr(secs)
         remaining = self.remaining.original_widget
-        remaining.set_text(format_time(secs, mins) + time_add_on)
+        if millis is not None:
+            remaining.set_text(format_time(secs, mins) + time_add_on)
+        else:
+            remaining.set_text(UNKNOWNS + time_add_on)
         self.remaining.set_attr_map({None: time_attr})
         return (millis, failure)
 
@@ -692,6 +702,7 @@ class ZuulReview(urwid.Pile):
     def refresh(self, raw_data):
         remaining_millis = []
         failures = 0
+        unknowns = 0
         for job_data in raw_data.get("jobs", []):
             if not job_data.get("name"):
                 continue
@@ -710,24 +721,29 @@ class ZuulReview(urwid.Pile):
                 self.contents.append((p_bar, p_bar_options))
             millis, failure = job.refresh(job_data)
             failures += int(failure)
-            remaining_millis.append(millis)
-        self.progress_bar.set_completion(calculate_completion(raw_data))
-        if remaining_millis:
-            max_remaining_millis = max(remaining_millis)
+            if millis is None:
+                unknowns += 1
+            else:
+                remaining_millis.append(millis)
+        try:
+            self.progress_bar.set_completion(calculate_completion(raw_data))
+        except (ValueError, TypeError):
+            pass
+        if len(remaining_millis) == 0 or unknowns > 1:
+            time_txt = UNKNOWNS
+            time_attr = select_time_attr(None)
         else:
-            max_remaining_millis = 0
-        (secs, mins) = decode_millis(max_remaining_millis)
-        time_txt = format_time(secs, mins, only_mins=True)
-        time_markup = [
-            ('clear', "ETA ["),
-            ('clear', "]"),
-        ]
+            secs, mins = decode_millis(max(remaining_millis))
+            time_txt = format_time(secs, mins, only_mins=True)
+            time_attr = select_time_attr(secs)
         if failures > 0:
             time_attr = 'dead'
             time_txt += "!"
-        else:
-            time_attr = select_time_attr(secs)
-        time_markup.insert(1, (time_attr, time_txt))
+        time_markup = [
+            ('clear', "ETA ["),
+            (time_attr, time_txt),
+            ('clear', "]"),
+        ]
         self.eta_text.set_text(time_markup)
         for i, (w, attrs) in enumerate(self.contents):
             if w.selectable():
