@@ -17,26 +17,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import contextlib
-import errno
 import fnmatch
 import functools
 import json
 import logging
 import optparse
-import os
-import shutil
 import sys
-import tempfile
 import thread
 import threading
 import time
 
-from datetime import datetime
-
 from six.moves import queue
 
-import git
 import requests
 import six
 import urwid
@@ -44,15 +36,11 @@ import urwid
 LOG = logging.getLogger(__name__)
 
 ### DEFAULT SETTINGS
-
 ZUUL_URL = 'http://zuul.openstack.org/status.json'
 ZUUL_FREQ = 30
 ZUUL_MIN_FREQ = 5
 ALARM_FREQ = 0.5
 SCREENS = 3
-
-# Run git gc every X seconds
-GC_DELAY = 3600
 
 ### GUI CONSTANTS
 
@@ -94,18 +82,7 @@ JOB_RESULT_FAILURES = ('FAILURE',)
 START = 'start'
 END = 'end'
 UNKNOWNS = "???"
-
-
-@contextlib.contextmanager
-def temp_dir(**kwargs):
-    d = tempfile.mkdtemp(**kwargs)
-    try:
-        yield d
-    finally:
-        try:
-            shutil.rmtree(d)
-        except Exception:
-            LOG.exception("Failed deleting temporary directory %s", d)
+REVISION_PATH = "%(server)s/changes/%(review)s/revisions/%(revision)s/review"
 
 
 def select_time_attr(secs):
@@ -160,59 +137,6 @@ def decode_millis(millis):
     return (secs, minutes)
 
 
-def detail_commit(commit):
-
-    def detail_actor(actor):
-        return {
-            'name': actor.name,
-            'email': actor.email,
-        }
-
-    return {
-        'summary': commit.summary,
-        'message': commit.message,
-        'sha': commit.hexsha,
-        'type': commit.type,
-        'committer': detail_actor(commit.committer),
-        'author': detail_actor(commit.author),
-        'dates': {
-            'committed': datetime.fromtimestamp(commit.committed_date),
-            'authored': datetime.fromtimestamp(commit.authored_date),
-        },
-    }
-
-
-def clone_project(git_server, project, code_path):
-    # Create a temporary directory, clone there, then attempt to move to the
-    # main directory, if the move fails, that's ok, but the initial clone
-    # should not.
-    with temp_dir() as tmp_d:
-        git_server = git_server.rstrip("/")
-        git_uri = "%s/%s" % (git_server, project)
-        repo_path = os.path.join(tmp_d, os.path.basename(project))
-        os.makedirs(repo_path)
-        repo = git.Repo.clone_from(git_uri, repo_path)
-        try:
-            shutil.move(repo.working_dir, code_path)
-        except IOError as e:
-            if e.errno != errno.EEXIST:
-                raise
-        return git.Repo(code_path)
-
-
-def reset_repo(repo):
-    origin = repo.remotes.origin
-    origin.update()
-    origin = repo.remotes.origin
-    for ref in origin.refs:
-        if ref.remote_head == 'HEAD':
-            continue
-        repo.create_head(ref.remote_head, ref, force=True)
-    repo.head.reference = origin.refs['HEAD']
-    repo.head.reset(index=True, working_tree=True)
-    repo.git.clean('-x', '-f', '-d')
-
-
 def get_int_key(k, in_what, default=0):
     try:
         return int(in_what[k])
@@ -231,24 +155,6 @@ def validate_entry(ok_set, entry):
         if fnmatch.fnmatch(entry, pat):
             return True
     return False
-
-
-def clear_extra_remotes(repo):
-    try:
-        origin_name = repo.remotes.origin.name
-    except AttributeError:
-        pass
-    else:
-        deletions = set()
-        for r in repo.remotes:
-            if r.name != origin_name:
-                deletions.add(r.name)
-        for remote_name in deletions:
-            LOG.debug("Deleting remote '%s' from repo %s", remote_name, repo)
-            try:
-                repo.delete_remote(remote_name)
-            except Exception:
-                pass
 
 
 def iter_pipelines(data):
@@ -309,68 +215,38 @@ class Finder(threading.Thread):
         with self.lock:
             return (self._fetched, self.work.qsize(), self._state)
 
+    def _extract_details(self, raw_data):
+        return {
+            'summary': raw_data['subject'],
+        }
+
     def process(self, review):
         project = review.project
         review_id = six.text_type(review.review_id)
         change_id = review.change_id
-
+        timeout = self.options.frequency * 0.50
         if change_id is None:
             raise ValueError("Can not detail review %s if it has no change"
                              " identifier" % (review))
-
-        LOG.debug("Fetching details for %s - %s/%s",
-                  project, review_id, change_id)
-        path_components = project.strip("/").split("/")
-        code_path = os.path.join(self.options.clone_dir, *path_components)
-        try:
-            base_path = os.path.dirname(code_path)
-            if not os.path.isdir(base_path):
-                os.makedirs(base_path)
-        except IOError as e:
-            if e.errno != errno.EEXIST:
-                raise
-        if not os.path.exists(code_path):
-            self._change_state("Cloning %s for %s" % (project,
-                                                      review.pretty_id))
-            repo = clone_project(self.options.git_server, project, code_path)
-        else:
-            repo = git.Repo(code_path)
-
-        if code_path not in self._gc_times:
-            self._gc_times[code_path] = int(time.time()) + GC_DELAY
-            LOG.debug("We will gc %s sometime after %s", code_path,
-                      self._gc_times[code_path])
-
-        self._change_state("Cleaning %s for %s" % (project, review.pretty_id))
-        clear_extra_remotes(repo)
-        reset_repo(repo)
-        if time.time() >= self._gc_times[code_path]:
-            self._change_state("Garbage collecting %s" % (project))
-            repo.git.gc()
-            self._gc_times[code_path] = int(time.time()) + GC_DELAY
-            LOG.debug("We will gc %s (again) sometime after %s", code_path,
-                      self._gc_times[code_path])
-
-        remote_server = self.options.remote_server
-        remote_server = remote_server.rstrip("/")
-        remote_uri = "%s/%s" % (remote_server, project)
-        remote = repo.create_remote(review_id, remote_uri)
-        sub_id = review_id[-2:]
-        ref_id = 'refs/changes/%s/%s/%s' % (sub_id, review_id, change_id)
-
-        # The git.remote.fetch method may read in git progress info and
-        # interpret it improperly causing an AssertionError. Because the
-        # data was fetched properly subsequent fetches don't seem to fail.
-        # So try again if an AssertionError is caught.
-        self._change_state("Fetching remote for %s" % (review.pretty_id))
-        try:
-            remote.fetch(ref_id)
-        except AssertionError:
-            remote.fetch(ref_id)
-        repo.git.checkout("FETCH_HEAD")
-
+        LOG.debug("Fetching details for %s - %s/%s", project, review_id,
+                  change_id)
+        remote_server = self.options.remote_server.rstrip("/")
+        url = REVISION_PATH % {
+            'server': remote_server,
+            'review': review_id,
+            'revision': change_id,
+        }
+        if not self.options.verbose_where:
+            url += "?pp=0"
+        self._change_state("Fetching url for %s" % (review.pretty_id))
         self._change_state("Detailing %s" % (review.pretty_id))
-        return detail_commit(repo.head.object)
+        req = requests.get(url, timeout=timeout)
+        # This removes the XSSI protection...
+        # https://gerrit-review.googlesource.com/Documentation/rest-api.html
+        cleaned_data = json.loads("\n".join(req.text.splitlines()[1:]))
+        LOG.debug("Got response:\n%s",
+                  json.dumps(cleaned_data, indent=4, sort_keys=True))
+        return self._extract_details(cleaned_data)
 
     def run(self):
 
@@ -1282,17 +1158,9 @@ def main():
     parser.add_option("--details", dest="detail", action='store_true',
                       help="fetch each reviews details"
                            " [default: %default]", default=False)
-    parser.add_option("--detail-dir", dest="clone_dir", action='store',
-                      help="store git checkout locations at"
-                           " [default: %default]",
-                      default=os.path.join(tempfile.gettempdir(), 'czuul'))
     parser.add_option("-v", "--verbose", dest="verbose_where", action='store',
                       help="run in verbose mode and log output to the given file",
                       metavar="FILE", default=None)
-    parser.add_option("--detail-git", dest="git_server", action='store',
-                      help="fetch git repositories from this git"
-                           " server [default: %default]",
-                      default='git://git.openstack.org/')
     parser.add_option("--detail-remote", dest="remote_server", action='store',
                       help="fetch review remotes from this gerrit server"
                            " [default: %default]",
@@ -1308,12 +1176,6 @@ def main():
     if options.detail:
         if not options.remote_server:
             parser.error("missing required remote server")
-        if not options.git_server:
-            parser.error("missing required git server")
-        if not options.clone_dir:
-            parser.error("missing required cloning directory")
-        if not os.path.isdir(options.clone_dir):
-            os.makedirs(options.clone_dir)
 
     setup_logging(options.verbose_where)
     frame = ZuulFrame(options)
