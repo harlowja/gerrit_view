@@ -176,14 +176,9 @@ Examples
 
     $ czuul --project "openstack/nova"
 
-2. To fetch review details (including git summary) about a specific
-   project::
+2. To track all OpenStack project details in one go::
 
-    $ czuul --details --project "openstack/nova"
-
-3. To track all OpenStack project details in one go::
-
-    $ czuul --details --project "openstack/*"
+    $ czuul --project "openstack/*"
 
 
 .. _urwid: http://excess.org/urwid/
