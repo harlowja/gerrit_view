@@ -150,7 +150,7 @@ urwid_ and the requests_ libraries):
       -r SECONDS, --refresh=SECONDS
                             refresh every X seconds [default: 30]
       --project=PROJECT     only show given projects reviews
-      --details             fetch each reviews details [default: False]
+      --no-details          skip fetching each reviews details
       -v FILE, --verbose=FILE
                             run in verbose mode and log output to the given file
       --detail-remote=REMOTE_SERVER
