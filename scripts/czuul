@@ -1154,9 +1154,9 @@ def main():
     parser.add_option("--project", dest="projects", action='append',
                       help="only show given projects reviews",
                       metavar="PROJECT", default=[])
-    parser.add_option("--details", dest="detail", action='store_true',
+    parser.add_option("--details", dest="detail", action='store_false',
                       help="fetch each reviews details"
-                           " [default: %default]", default=False)
+                           " [default: %default]", default=True)
     parser.add_option("-v", "--verbose", dest="verbose_where", action='store',
                       help="run in verbose mode and log output to the given file",
                       metavar="FILE", default=None)
