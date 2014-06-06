@@ -238,8 +238,8 @@ class Finder(threading.Thread):
         if not self.options.verbose_where:
             url += "?pp=0"
         self._change_state("Fetching url for %s" % (review.pretty_id))
-        self._change_state("Detailing %s" % (review.pretty_id))
         req = requests.get(url, timeout=timeout)
+        self._change_state("Detailing %s" % (review.pretty_id))
         # This removes the XSSI protection...
         # https://gerrit-review.googlesource.com/Documentation/rest-api.html
         cleaned_data = json.loads("\n".join(req.text.splitlines()[1:]))
