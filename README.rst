@@ -151,13 +151,8 @@ urwid_ and the requests_ libraries):
                             refresh every X seconds [default: 30]
       --project=PROJECT     only show given projects reviews
       --details             fetch each reviews details [default: False]
-      --detail-dir=CLONE_DIR
-                            store git checkout locations at [default: /tmp/czuul]
       -v FILE, --verbose=FILE
                             run in verbose mode and log output to the given file
-      --detail-git=GIT_SERVER
-                            fetch git repositories from this git server [default:
-                            git://git.openstack.org/]
       --detail-remote=REMOTE_SERVER
                             fetch review remotes from this gerrit server [default:
                             https://review.openstack.org/]
