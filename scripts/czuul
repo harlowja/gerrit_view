@@ -204,7 +204,6 @@ class Finder(threading.Thread):
         self.delayed_callbacks = frame.delayed_callbacks
         self._fetched = 0
         self._state = None
-        self._gc_times = {}
 
     def _change_state(self, state):
         with self.lock:
