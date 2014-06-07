@@ -68,6 +68,7 @@ setup(name='gerrit-view',
           'prettytable',
           'requests',
           'six',
+          'sloq',
           'urwid',
       ],
       classifiers=[
