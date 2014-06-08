@@ -219,7 +219,8 @@ class Finder(threading.Thread):
 
     def _extract_details(self, raw_data):
         return {
-            'summary': raw_data['subject'],
+            'summary': raw_data.get('subject'),
+            'author': raw_data.get('owner'),
         }
 
     def process(self, review):
@@ -565,6 +566,24 @@ class ZuulReview(urwid.Pile):
                 extra_rows.extend([
                     urwid.Text([('title', summary)], align='center'),
                 ])
+            author = details.get('author')
+            if author:
+                who_by = []
+                if author.get('name'):
+                    who_by.append(" %s" % author['name'])
+                    if author.get("email"):
+                        who_by.append(" (%s)" % author['email'])
+                elif author.get("email"):
+                    who_by.append(" %s" % author['email'])
+                if who_by:
+                    if extra_rows:
+                        who_by.insert(0, " by")
+                    else:
+                        who_by.insert(0, "by")
+                    creator = "".join(who_by)
+                    extra_rows.extend([
+                        urwid.Text([('body', creator)], align='center'),
+                    ])
             if extra_rows:
                 extra_rows.insert(0, urwid.Divider(u'─'))
                 extra_rows.append(urwid.Divider(u'─'))
