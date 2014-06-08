@@ -245,11 +245,14 @@ class Finder(threading.Thread):
         req = requests.get(url, timeout=timeout)
         # This removes the XSSI protection...
         # https://gerrit-review.googlesource.com/Documentation/rest-api.html
-        cleaned_data = json.loads("\n".join(req.text.splitlines()[1:]))
-        LOG.debug("Got response:\n%s",
-                  json.dumps(cleaned_data, indent=4, sort_keys=True))
-        self._change_state("Detailing %s" % (review.pretty_id))
-        return self._extract_details(cleaned_data)
+        data = json.loads("\n".join(req.text.splitlines()[1:]))
+        if isinstance(data, dict):
+            LOG.debug("Got response:\n%s",
+                      json.dumps(data, indent=4, sort_keys=True))
+            self._change_state("Detailing %s" % (review.pretty_id))
+            return self._extract_details(data)
+        else:
+            raise TypeError("Expected dict type, got '%s'" % type(data))
 
     def run(self):
 
