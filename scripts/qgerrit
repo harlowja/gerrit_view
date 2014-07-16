@@ -188,18 +188,10 @@ def print_results(results, fields):
     table.padding_width = 1
     table.align = "l"  # left alignment
 
-    # NOTE(harlowja): this keeps track of the review numbers seen, to avoid
-    # duplicates (which shouldn't happen but may).
-    num_seen = set()
+    has_results = False
     for res in results:
-        try:
-            num = int(res['number'])
-        except (ValueError, TypeError, KeyError):
-            num = -1
-        if num < 0 or num in num_seen:
-            continue
+        has_results = True
 
-        num_seen.add(num)
         row = []
         for field in fields:
             func = field["mapfunc"]
@@ -211,7 +203,9 @@ def print_results(results, fields):
             row.append(val)
         table.add_row(row)
 
-    if len(num_seen):
+    # Check we've got results. Note that we don't just check the length of
+    # results in case it's an iterator.
+    if has_results:
         print(table.get_string())
 
 
@@ -540,6 +534,10 @@ def main():
                        options.port,
                        options.instance,
                        args)
+
+    # There shouldn't be any duplicates, but apparently there occasionally are
+    # anyway. Filter them out.
+    entries = uniq_itr(entries, lambda x: x['number'])
 
     if options.limit != 0:
         entries = islice(entries, options.limit)
