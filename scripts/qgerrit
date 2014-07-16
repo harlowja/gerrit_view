@@ -115,12 +115,13 @@ def run_query(login_name, query, key_file, port, hostname):
                 LOG.exception("Failure decoding received entry")
 
 
-def uniq_itr(itr):
+def uniq_itr(itr, keyfunc=lambda x: x):
     seen = set()
     for i in itr:
-        if i in seen:
+        key = keyfunc(i)
+        if key in seen:
             continue
-        seen.add(i)
+        seen.add(key)
         yield i
 
 
