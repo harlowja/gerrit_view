@@ -42,6 +42,9 @@ based on a set of criteria/filters::
                             gerrit ssh keyfile [default: attempt to use
                             local agent]
       -t SORT, --sort=SORT  sort order for results [default: createdOn]
+      -n LIMIT, --limit=LIMIT
+                            Limit the number of returned results. Note that this
+                            limit is applied before sorting
       -f FIELD, --field=FIELD
                             display field in results [default: 'approvals',
                             'branch', 'createdOn', 'lastUpdated', 'owner',

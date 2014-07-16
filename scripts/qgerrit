@@ -18,7 +18,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from itertools import ifilter
+from itertools import ifilter, islice
 import json
 import logging
 import optparse
@@ -338,7 +338,8 @@ def matches_reviewer(result, reviewers):
     return True
 
 
-def get_info(loginname, keyfile, terms, approval, reviewers, port, hostname, files):
+def get_info(loginname, keyfile, terms, approval, reviewers, port, hostname,
+             files):
     clauses = []
     for term in terms:
         if len(terms[term]) == 0:
@@ -465,6 +466,10 @@ def main():
     parser.add_option("-t", "--sort", dest="sort", action='store',
                       help="sort order for results [default: %default]",
                       metavar="SORT", default=DEFAULT_SORT)
+    parser.add_option("-n", "--limit", dest="limit", action="store",
+                      type="int", default=0,
+                      help="Limit the number of returned results. Note that "
+                           "this limit is applied before sorting")
     parser.add_option("-f", "--field", dest="fields", action='append',
                       help="display field in results"
                            " [default: %s]" % format_fields(ALL_FIELD_NAMES),
@@ -534,6 +539,10 @@ def main():
                        options.port,
                        options.instance,
                        args)
+
+    if options.limit != 0:
+        entries = islice(entries, options.limit)
+
     entries = sort_results(entries, sort_by, reverse)
     print_results(entries, fields)
 
