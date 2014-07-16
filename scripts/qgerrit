@@ -46,6 +46,7 @@ GERRIT_CMD = ('gerrit', 'query',
               '--format=JSON',
               "--current-patch-set",
               "--files")
+INDENT = ' '
 
 ###
 
@@ -116,6 +117,11 @@ def run_query(login_name, query, key_file, port, hostname, dependencies):
                         return
                 else:
                     sortkey = dec['sortKey']
+
+                    # Always initialise the children of this change so we can
+                    # assume it later
+                    dec['children'] = []
+
                     yield dec
             except (ValueError, TypeError):
                 LOG.exception("Failure decoding received entry")
@@ -194,24 +200,36 @@ def print_results(results, fields):
     table.padding_width = 1
     table.align = "l"  # left alignment
 
-    has_results = False
-    for res in results:
-        has_results = True
+    # Python hack because variable is immutable from closure, but its contents
+    # are not
+    has_results = [False]
+    def add_results(results, indent=0):
+        for result in results:
+            has_results[0] = True
 
-        row = []
-        for field in fields:
-            func = field["mapfunc"]
-            val = func(field["key"], res)
-            if "truncate" in field:
-                maxlen = field["truncate"]
-                if len(val) > maxlen:
-                    val = val[0:maxlen] + "..."
-            row.append(val)
-        table.add_row(row)
+            row = []
+            for i in range(0, len(fields)):
+                field = fields[i]
+                func = field["mapfunc"]
+                val = func(field["key"], result)
+
+                # Indent the first value to indicate dependency trees
+                if i == 0:
+                    val = INDENT * indent + val
+
+                if "truncate" in field:
+                    maxlen = field["truncate"]
+                    if len(val) > maxlen:
+                        val = val[0:maxlen] + "..."
+                row.append(val)
+            table.add_row(row)
+
+            add_results(result['children'], indent + 1)
+    add_results(results)
 
     # Check we've got results. Note that we don't just check the length of
     # results in case it's an iterator.
-    if has_results:
+    if has_results[0]:
         print(table.get_string())
 
 
@@ -340,7 +358,7 @@ def matches_reviewer(result, reviewers):
 
 
 def get_info(loginname, keyfile, terms, approval, reviewers, port, hostname,
-             files):
+             dependencies, files):
     clauses = []
     for term in terms:
         if len(terms[term]) == 0:
@@ -350,7 +368,7 @@ def get_info(loginname, keyfile, terms, approval, reviewers, port, hostname,
         if clause != "":
             clauses.append(clause)
     query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
-    results = run_query(loginname, query, keyfile, port, hostname)
+    results = run_query(loginname, query, keyfile, port, hostname, dependencies)
     if files is not None and len(files) > 0:
         results = ifilter(lambda result: matches_file(result, files), results)
     if approval is not None:
@@ -398,7 +416,10 @@ def get_owner(k, row):
 
 
 def sort_results(results, key, reverse):
-    return sorted(results, key=lambda result: result[key], reverse=reverse)
+    for result in sorted(results, key=lambda result: result[key],
+                         reverse=reverse):
+        result['children'] = sort_results(result['children'], key, reverse)
+        yield result
 
 
 # Late creation of this to make sure we can capture the needed functions.
@@ -471,6 +492,9 @@ def main():
                       type="int", default=0,
                       help="Limit the number of returned results. Note that "
                            "this limit is applied before sorting")
+    parser.add_option("-d", "--deps", dest="dependencies",
+                      action="store_const", const=True, default=False,
+                      help="Display results as a dependency tree")
     parser.add_option("-f", "--field", dest="fields", action='append',
                       help="display field in results"
                            " [default: %s]" % format_fields(ALL_FIELD_NAMES),
@@ -539,6 +563,7 @@ def main():
                        options.reviewers,
                        options.port,
                        options.instance,
+                       options.dependencies,
                        args)
 
     # There shouldn't be any duplicates, but apparently there occasionally are
@@ -547,6 +572,27 @@ def main():
 
     if options.limit != 0:
         entries = islice(entries, options.limit)
+
+    if options.dependencies:
+        # Index all entries by change id
+        all_entries = {}
+        for entry in entries:
+            all_entries[entry['id']] = entry
+
+        # Turn the list into a dependency tree
+        entries = []
+        for entry in all_entries.values():
+            depends = None
+            if 'dependsOn' in entry:
+                # N.B. We only consider the first dependency. We don't allow
+                # merge commits anyway, so this should never be an issue.
+                depends = entry['dependsOn'][0]['id']
+
+            if depends is not None and depends in all_entries:
+                parent = all_entries[depends]
+                parent['children'].append(entry)
+            else:
+                entries.append(entry)
 
     entries = sort_results(entries, sort_by, reverse)
     print_results(entries, fields)
