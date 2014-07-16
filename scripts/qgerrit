@@ -88,18 +88,31 @@ def run_query(login_name, query, key_file, port, hostname):
     cmd.extend(server_cmd(login_name, port=port, host=hostname))
     cmd.extend(GERRIT_CMD)
     cmd.append(query)
-    (stdout, _stderr) = tiny_p(cmd)
-    for e in stdout.splitlines():
-        try:
-            dec = json.loads(e)
-            if not isinstance(dec, (dict)):
-                raise TypeError("Expected decoded dict, not %s" % (type(dec)))
-            # Skip the row count entry (which seems to come in last)
-            if 'rowCount' in dec or dec.get('type') == 'stats':
-                continue
-            yield dec
-        except (ValueError, TypeError):
-            LOG.exception("Failure decoding received entry")
+
+    sortkey = None
+    while True:
+        if sortkey is None:
+            (stdout, _stderr) = tiny_p(cmd)
+        else:
+            (stdout, _stderr) = tiny_p(cmd + ['resume_sortkey:%s' % sortkey])
+
+        for e in stdout.splitlines():
+            try:
+                dec = json.loads(e)
+                if not isinstance(dec, (dict)):
+                    raise TypeError("Expected decoded dict, not %s" %
+                                    (type(dec)))
+
+                # The stats row comes last
+                # Stop if we returned 0 results
+                if dec.get('type') == 'stats':
+                    if dec.get('rowCount') == 0:
+                        return
+                else:
+                    sortkey = dec['sortKey']
+                    yield dec
+            except (ValueError, TypeError):
+                LOG.exception("Failure decoding received entry")
 
 
 def uniq_itr(itr):
