@@ -51,13 +51,17 @@ GERRIT_CMD = ('gerrit', 'query',
 
 
 def tiny_p(cmd, capture=True, ok_rcs=(0,)):
+    LOG.debug("Running cmd %s", cmd)
+
+    if hasattr(subprocess, 'check_output'):
+        return subprocess.check_output(cmd)
+
     # Borrowed from cloud-init...
     #
     # Darn python 2.6 doesn't have check_output (argggg)
     stdout = subprocess.PIPE
     if not capture:
         stdout = None
-    LOG.debug("Running cmd %s", cmd)
     sp = subprocess.Popen(cmd, stdout=stdout,
                           stderr=None, stdin=None)
     (out, err) = sp.communicate()
