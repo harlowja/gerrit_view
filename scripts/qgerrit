@@ -18,6 +18,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from itertools import ifilter
 import json
 import logging
 import optparse
@@ -88,7 +89,6 @@ def run_query(login_name, query, key_file, port, hostname):
     cmd.extend(GERRIT_CMD)
     cmd.append(query)
     (stdout, _stderr) = tiny_p(cmd)
-    results = []
     for e in stdout.splitlines():
         try:
             dec = json.loads(e)
@@ -97,10 +97,9 @@ def run_query(login_name, query, key_file, port, hostname):
             # Skip the row count entry (which seems to come in last)
             if 'rowCount' in dec or dec.get('type') == 'stats':
                 continue
-            results.append(dec)
+            yield dec
         except (ValueError, TypeError):
             LOG.exception("Failure decoding received entry")
-    return results
 
 
 def uniq_itr(itr):
@@ -338,13 +337,13 @@ def get_info(loginname, keyfile, terms, approval, reviewers, port, hostname, fil
     query = " AND ".join(map(lambda clause: "(%s)" % clause, clauses))
     results = run_query(loginname, query, keyfile, port, hostname)
     if files is not None and len(files) > 0:
-        results = filter(lambda result: matches_file(result, files), results)
+        results = ifilter(lambda result: matches_file(result, files), results)
     if approval is not None:
-        results = filter(lambda result: matches_approval(result, approval),
-                         results)
+        results = ifilter(lambda result: matches_approval(result, approval),
+                          results)
     if len(reviewers) > 0:
-        results = filter(lambda result: matches_reviewer(result, reviewers),
-                         results)
+        results = ifilter(lambda result: matches_reviewer(result, reviewers),
+                          results)
     return results
 
 
