@@ -65,7 +65,7 @@ def tiny_p(cmd, capture=True, ok_rcs=(0,)):
     if ret not in ok_rcs:
         raise RuntimeError("Failed running %s [rc=%s] (%s, %s)"
                            % (cmd, ret, out, err))
-    return (out, err)
+    return out
 
 
 def server_cmd(login_name, port=GERRIT_PORT, host=GERRIT_HOST):
@@ -79,20 +79,24 @@ def server_cmd(login_name, port=GERRIT_PORT, host=GERRIT_HOST):
     return [str(p) for p in pieces]
 
 
-def run_query(login_name, query, key_file, port, hostname):
+def run_query(login_name, query, key_file, port, hostname, dependencies):
     cmd = ['ssh']
     if key_file and os.path.isfile(key_file):
         cmd.extend(['-i', str(key_file)])
     cmd.extend(server_cmd(login_name, port=port, host=hostname))
     cmd.extend(GERRIT_CMD)
+
+    if dependencies:
+        cmd.append('--dependencies')
+
     cmd.append(query)
 
     sortkey = None
     while True:
         if sortkey is None:
-            (stdout, _stderr) = tiny_p(cmd)
+            stdout = tiny_p(cmd)
         else:
-            (stdout, _stderr) = tiny_p(cmd + ['resume_sortkey:%s' % sortkey])
+            stdout = tiny_p(cmd + ['resume_sortkey:%s' % sortkey])
 
         for e in stdout.splitlines():
             try:
