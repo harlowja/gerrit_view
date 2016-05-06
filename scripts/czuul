@@ -947,6 +947,10 @@ class Renderer(threading.Thread):
                 reviews[r.unique_id] = r
                 pipes[name]['reviews'].append(r)
 
+            if self.options.hide_empty_pipelines:
+                if len(pipes[name]['reviews']) == 0:
+                    pipes.pop(name, None)
+
         def cmp_reviews(r1, r2):
             return cmp((r1.review_id, r1.change_id),
                        (r2.review_id, r2.change_id))
@@ -1174,6 +1178,9 @@ def main():
     parser.add_option("-p", "--pipeline", dest="pipelines", action='append',
                       help="only show given pipelines reviews",
                       metavar="PIPELINE", default=[])
+    parser.add_option("--hide-empty-pipelines", dest="hide_empty_pipelines",
+                      action='store_true',
+                      help="hide pipelines without reviews", default=False)
     parser.add_option("-r", "--refresh", dest="frequency", action='store',
                       type=int,
                       help="refresh every X seconds [default: %default]",
